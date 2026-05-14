@@ -1,72 +1,147 @@
-# CyberDash
+<div align="center">
 
-ESP32 cyberpunk environmental dashboard — TFT UI, I2S sound-level monitoring,
-BME280 climate sensing, SD logging, async web dashboard, OTA.
+# ⟁ CYBERDASH ⟁
 
-## Architecture
+**A production-grade ESP32 cyberpunk telemetry platform**
+TFT dashboard · I2S sound monitoring · BME280 climate sensing · SD logging · live web UI · OTA
 
-FreeRTOS task layout (pinned cores):
+![Platform](https://img.shields.io/badge/platform-ESP32-22e3ff?style=for-the-badge&logo=espressif&logoColor=black)
+![Framework](https://img.shields.io/badge/framework-Arduino-00979d?style=for-the-badge&logo=arduino&logoColor=white)
+![Build](https://img.shields.io/badge/build-PlatformIO-f5822a?style=for-the-badge&logo=platformio&logoColor=white)
+![FreeRTOS](https://img.shields.io/badge/RTOS-FreeRTOS-3bff9a?style=for-the-badge)
+![OTA](https://img.shields.io/badge/OTA-ArduinoOTA-ff37c7?style=for-the-badge)
+![License](https://img.shields.io/badge/license-MIT-lightgrey?style=for-the-badge)
 
-| Task     | Core | Period   | Purpose                           |
-| -------- | ---- | -------- | --------------------------------- |
-| sensors  | 0    | 1000 ms  | BME280 read → shared state        |
-| audio    | 0    | 50 ms    | I2S RMS → dB SPL → shared state   |
-| log      | 0    | 10 s     | Append CSV row to SD              |
-| alerts   | 0    | 500 ms   | Threshold beeps                   |
-| display  | 1    | 33 ms    | TFT render (~30 FPS)              |
-| web      | 1    | 1 s      | WS broadcast + OTA handle         |
+</div>
 
-Shared state in `g_state` guarded by `portMUX_TYPE` (see `state.h`).
-Every task is registered with the watchdog (`WDT_TIMEOUT_S = 8`).
+---
 
-## Hardware
+## ✦ Overview
 
-| Pin (GPIO) | Function          |
-| ---------- | ----------------- |
-| 18 / 23 / 19 | TFT SCK / MOSI / MISO (VSPI, shared with SD) |
-| 5          | TFT CS            |
-| 2          | TFT DC            |
-| 4          | TFT RST           |
-| 15         | TFT backlight (LEDC ch 1) |
-| 13         | SD CS             |
-| 21 / 22    | I2C SDA / SCL (BME280) |
-| 26 / 25 / 33 | I2S BCLK / WS / DIN (INMP441) |
-| 27         | Speaker (LEDC ch 0) |
-| 0          | Button (boot pin, do not pull low at reset) |
+CyberDash turns an ESP32 into a self-hosted, real-time environmental dashboard with a cyberpunk aesthetic on both the on-device TFT and the web UI. Sensors, audio RMS, SD logging, and the web server all run on separate FreeRTOS tasks pinned across both cores, coordinated through a single mutex-protected state struct.
 
-Boot-strap GPIOs (0, 2, 5, 15) are used — keep them floating/idle at reset.
+## ✦ Features
 
-## Build
+- **FreeRTOS architecture** — 6 pinned tasks (sensors, audio, log, alerts, display, web), watchdog on every task
+- **Thread-safe state** — single `SensorState` guarded by `portMUX_TYPE` critical sections
+- **Cyberpunk TFT UI** — ST7735 128×160, animated boot, neon palette, sparkline, partial redraws (~30 FPS)
+- **Live web dashboard** — LittleFS-served, WebSocket streaming, glassmorphism + neon glow, HTTP fallback
+- **I2S sound metering** — INMP441 → 24-bit RMS → estimated dB SPL → threshold alerts
+- **SD CSV logging** — 1 MB auto-rotation, `/log.csv` download endpoint
+- **OTA over WiFi** — `ArduinoOTA` + mDNS (`cyberdash.local`)
+- **Non-blocking everywhere** — no `delay()` in tasks, all timing via `vTaskDelay`/`millis`
+
+## ✦ Architecture
 
 ```
-pio run                              # build
-pio run -t upload                    # serial flash
-pio device monitor                   # 115200 baud
-pio run -e esp32dev-ota -t upload    # OTA flash (after first serial flash)
+              ┌──────── core 0 (I/O) ────────┐   ┌─────── core 1 (UI) ───────┐
+              │                              │   │                           │
+   I2C ──▶ sensors  ─┐                       │   │  display ─▶ ST7735 TFT    │
+                     │                       │   │                           │
+   I2S ──▶ audio    ─┤   stateUpdate() ──▶  g_state  ◀── stateSnapshot()    │
+                     │   (portMUX_TYPE)      │   │     │                     │
+   SPI ──▶ log      ─┘                       │   │     └─▶ web ──▶ /ws /api  │
+                                             │   │                           │
+              └──── alerts (beeper) ─────────┘   └───────── OTA ─────────────┘
 ```
 
-mDNS hostname: `cyberdash.local` · OTA password: `changeme` (change in `config.h`).
+Cross-community bridges (per `graphify-out/`): `stateSnapshot()` (betweenness 0.44), `stateUpdate()` (0.32), `displayRender()` (0.30).
 
-## Web
+## ✦ Hardware
 
-- `http://cyberdash.local/`           dashboard
-- `http://cyberdash.local/api/data`   JSON
-- `http://cyberdash.local/log.csv`    download log
-- `ws://cyberdash.local/ws`           live stream
+| GPIO       | Function                                          |
+| ---------- | ------------------------------------------------- |
+| 18 / 23 / 19 | TFT SCK / MOSI / MISO (VSPI, shared with SD)    |
+| 5          | TFT CS                                            |
+| 2          | TFT DC                                            |
+| 4          | TFT RST                                           |
+| 15         | TFT backlight (LEDC ch 1, PWM)                    |
+| 13         | SD CS                                             |
+| 21 / 22    | I2C SDA / SCL (BME280)                            |
+| 26 / 25 / 33 | I2S BCLK / WS / DIN (INMP441)                   |
+| 27         | Speaker / piezo (LEDC ch 0)                       |
+| 0          | Button (boot strap — keep idle at reset)          |
 
-## Config
+⚠️  GPIO 0, 2, 5, 15 are strapping pins — keep them at their default reset state.
 
-WiFi credentials, GPIO map, sample rates, alert thresholds — all in `config.h`.
-Runtime config persisted to `/config.json` on SD via `storageReadConfig` /
-`storageWriteConfig`.
+## ✦ Project Layout
 
-## Files
+```
+CyberDash-ESP32/
+├── platformio.ini         build envs (esp32dev, esp32dev-ota)
+├── CyberDash.ino          task setup, WiFi/OTA, watchdog init
+├── config.h               pins, periods, thresholds, creds
+├── state.h                shared SensorState + mutex helpers
+├── display.{h,cpp}        ST7735 cyberpunk UI
+├── sensors.{h,cpp}        BME280 I2C
+├── audio.{h,cpp}          I2S RX + LEDC speaker
+├── storage.{h,cpp}        SD CSV log + rotation + config.json
+├── webserver.{h,cpp}      AsyncWebServer + WebSocket + LittleFS
+├── data/                  → flashed to LittleFS
+│   ├── index.html
+│   ├── style.css
+│   └── app.js
+├── .vscode/               build/upload/monitor tasks
+└── graphify-out/          knowledge-graph snapshot of the codebase
+```
 
-- `CyberDash.ino`  task setup + WiFi/OTA bring-up
-- `display.*`      ST7735 TFT cyberpunk UI
-- `sensors.*`      BME280
-- `audio.*`        I2S RMS + LEDC tone speaker
-- `storage.*`      SD CSV log with 1 MB rotation
-- `webserver.*`    AsyncWebServer + WebSocket
-- `state.h`        thread-safe shared state
-- `config.h`       all compile-time settings
+## ✦ Build & Flash
+
+```bash
+# 1) Firmware (first flash via USB)
+pio run -t upload
+
+# 2) Web assets to LittleFS
+pio run -t uploadfs
+
+# 3) Serial monitor
+pio device monitor
+
+# Subsequent updates over WiFi (OTA)
+pio run -e esp32dev-ota -t upload
+pio run -e esp32dev-ota -t uploadfs
+```
+
+mDNS hostname: **`cyberdash.local`** · default OTA password: `changeme` (change in `config.h`).
+
+## ✦ Endpoints
+
+| Path          | Purpose                                 |
+| ------------- | --------------------------------------- |
+| `/`           | Cyberpunk dashboard (LittleFS)          |
+| `/ws`         | WebSocket — pushes `{t,h,p,db}` on tick |
+| `/api/data`   | JSON snapshot (sensors only)            |
+| `/api/sys`    | JSON system info (wifi, sd, heap, rssi) |
+| `/log.csv`    | Download rotating CSV log               |
+| `/health`     | `ok` — for uptime probes                |
+| `/update`     | ArduinoOTA endpoint (gated by password) |
+
+## ✦ Configuration
+
+Edit `config.h`:
+
+```cpp
+#define WIFI_SSID    "Airtel_anja_6760"
+#define WIFI_PASS    "air67968"
+#define HOSTNAME     "cyberdash"
+#define OTA_PASSWORD "changeme"
+
+#define TEMP_ALERT_C  32.0f
+#define HUMID_ALERT   80.0f
+#define DB_ALERT      85
+```
+
+Runtime values can be persisted to `/config.json` on SD via `storageReadConfig()` / `storageWriteConfig()`.
+
+## ✦ Roadmap
+
+- [ ] Replace WiFi creds with WiFiManager captive portal
+- [ ] HTTPS + auth for the web dashboard
+- [ ] FFT-based audio spectrum view on TFT + web
+- [ ] PSRAM frame buffer for tear-free TFT updates
+- [ ] InfluxDB / MQTT exporter task
+- [ ] Battery + INA219 power telemetry
+
+## ✦ License
+
+MIT © Anjan Ganapathy K
