@@ -23,9 +23,16 @@ jobs:
         id: tag
         run: |
           if [ -n "${{ inputs.tag }}" ]; then
-            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            TAG="${{ inputs.tag }}"
           else
-            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "name=${TAG}" >> "$GITHUB_OUTPUT"
+          # v0.x.x or any tag with a hyphen (e.g. v1.0.0-rc1) is a prerelease
+          if [[ "${TAG}" == v0.* || "${TAG}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up Python
@@ -99,7 +106,7 @@ jobs:
           name: CyberDash ${{ steps.tag.outputs.name }}
           body_path: RELEASE_NOTES.md
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.tag.outputs.prerelease }}
           fail_on_unmatched_files: true
           files: |
             dist/firmware.bin

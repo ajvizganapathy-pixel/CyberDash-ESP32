@@ -897,8 +897,14 @@ async function fetchReleases() {
     const releases = await res.json();
 
     if (!releases.length) {
-      list.innerHTML = `<div style="font-size:11px;color:var(--muted);padding:12px 0;text-align:center;">No releases found yet.</div>`;
-      log('warn', 'No releases found in the repository.');
+      list.innerHTML = `
+        <div style="font-size:11px;color:var(--muted);padding:14px 8px;text-align:center;line-height:1.7;">
+          <div style="color:var(--accent);font-weight:600;margin-bottom:4px;">No releases published yet</div>
+          The first official firmware build hasn't shipped.<br/>
+          Switch to <strong style="color:var(--accent);">Local .bin</strong> above to flash your own build, or
+          <a href="${REPO_URL}/releases" target="_blank" style="color:var(--accent);">watch the repo</a> for v0.1.0.
+        </div>`;
+      log('warn', 'No releases found — use the Local .bin tab in the meantime.');
       return;
     }
 
