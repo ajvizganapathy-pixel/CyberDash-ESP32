@@ -845,8 +845,36 @@ async function handleConnect() {
 
     log('info', `Syncing with ROM bootloader (target baud ${baud})…`);
     const chipName = await esploader.main();
-    connected = true;
     log('ok', `Chip detected: ${chipName}`);
+
+    // ── Chip-family guard ─────────────────────────────────────────────
+    // CyberDash firmware is built for `board = esp32dev` (original ESP32).
+    // ESP8266 has a different architecture (no separate bootloader/parts
+    // image, app starts at 0x0) — flashing ESP32 .bin onto it bricks boot.
+    // Other ESP32 variants (S2/S3/C3/H2) may work but use different
+    // bootloader offsets; refuse those too unless the firmware was rebuilt.
+    const isExactEsp32 = /^esp32(?:[\s-]?(?:d0wd|d2wd|pico|wroom|wrover))?$/i.test(chipName)
+                         || chipName.trim().toLowerCase() === 'esp32';
+    const isOtherEsp32 = /^esp32-?(s2|s3|c2|c3|c6|h2|p4)/i.test(chipName);
+    const isEsp8266    = /esp8266/i.test(chipName);
+
+    if (isEsp8266) {
+      log('err', `✗ Detected ${chipName}. CyberDash firmware is ESP32 only —`);
+      log('err', '  the boot ROM and flash layout are incompatible. Aborting.');
+      log('muted', 'Connect a real ESP32 (ESP32-WROOM / -WROVER / etc.) and try again.');
+      try { await transport.disconnect(); } catch (_) {}
+      transport = null; esploader = null; port = null; connected = false;
+      setStatus('error', 'ESP8266 not supported by this firmware');
+      updateConnectUI(false);
+      return;
+    }
+    if (isOtherEsp32 && !isExactEsp32) {
+      log('warn', `⚠ Detected ${chipName}. Released binaries target plain ESP32 (esp32dev).`);
+      log('warn', '  Bootloader offset may differ on this variant — flashing may not boot.');
+      log('muted', 'Proceed only if you rebuilt the firmware for your target. Continue with caution.');
+    }
+
+    connected = true;
 
     // Pull live chip metadata
     let macStr = '—', flashIdHex = '—', features = '—', revStr = '—', xtalStr = '40 MHz';
@@ -1122,7 +1150,22 @@ function abToBinaryString(buf) {
 
 async function fetchAssetAsBinaryString(asset, label) {
   log('info', `Downloading ${label}: ${asset.name} (${(asset.size/1024).toFixed(1)} KB)…`);
-  const res = await fetch(asset.browser_download_url);
+  // Prefer the GitHub API asset URL with Accept: octet-stream.
+  // api.github.com has ACAO:* unconditionally; browser_download_url's
+  // 302 → release-assets.githubusercontent.com can fail CORS preflight
+  // in some browsers/networks (the "Failed to fetch" path).
+  const url = asset.url || asset.browser_download_url;
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: asset.url ? { 'Accept': 'application/octet-stream' } : {},
+      cache: 'no-store',
+    });
+  } catch (e) {
+    // Fall back to the direct download URL if the API path is blocked
+    log('warn', `  API fetch threw (${e.message}). Falling back to browser_download_url…`);
+    res = await fetch(asset.browser_download_url, { cache: 'no-store' });
+  }
   if (!res.ok) throw new Error(`${asset.name} download failed (HTTP ${res.status})`);
   const buf = await res.arrayBuffer();
   log('muted', `  ✓ ${asset.name} fetched (${buf.byteLength} bytes)`);
