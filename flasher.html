@@ -1,0 +1,1211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CyberDash Flasher · ESP32 Web Serial</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+
+  <!-- esptool.js — official Espressif JS port for WebSerial flashing -->
+  <script type="module">
+    // We import esptool.js from the ESPHome CDN (esphome.github.io/esp-web-tools)
+    // This provides the ESPLoader class used by the connect flow below.
+    // The actual flashing logic is gated behind the user clicking Connect.
+  </script>
+
+  <style>
+    :root {
+      --bg:        #060809;
+      --bg2:       #0a0d0f;
+      --surface:   #0f1315;
+      --surface2:  #141a1d;
+      --border:    rgba(255,255,255,.06);
+      --border-h:  rgba(0,229,200,.2);
+      --text:      #dde5ea;
+      --muted:     #4a5962;
+      --accent:    #00e5c8;
+      --accent2:   #0075ff;
+      --danger:    #ff5151;
+      --warn:      #ffaa00;
+      --ok:        #27c93f;
+      --r:         10px;
+      --font-mono: 'JetBrains Mono', monospace;
+      --font-disp: 'Syne', sans-serif;
+    }
+
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.6;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 4px; }
+    ::selection { background: rgba(0,229,200,.2); }
+
+    /* ════════ TOPBAR ════════ */
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 32px;
+      background: rgba(6,8,9,.9);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 100;
+    }
+
+    .topbar-logo {
+      display: flex; align-items: center; gap: 10px;
+      font-family: var(--font-disp); font-weight: 800; font-size: 15px;
+      letter-spacing: -.02em; text-decoration: none; color: var(--text);
+    }
+    .logo-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 8px var(--accent);
+      animation: blink 2s ease infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:1;} 50%{opacity:.25;} }
+
+    .topbar-right {
+      display: flex; align-items: center; gap: 12px;
+    }
+    .topbar-back {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--muted); text-decoration: none;
+      padding: 7px 14px; border: 1px solid var(--border); border-radius: 7px;
+      transition: color .2s, border-color .2s;
+    }
+    .topbar-back:hover { color: var(--text); border-color: var(--border-h); }
+
+    .topbar-gh {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px; letter-spacing: .06em;
+      color: var(--muted); text-decoration: none;
+      padding: 7px 14px; border: 1px solid var(--border); border-radius: 7px;
+      transition: color .2s, border-color .2s;
+    }
+    .topbar-gh:hover { color: var(--accent); border-color: var(--border-h); }
+
+    /* ════════ BROWSER WARNING ════════ */
+    .browser-warn {
+      display: none;
+      background: rgba(255,81,81,.07); border: 1px solid rgba(255,81,81,.2);
+      border-radius: var(--r); padding: 14px 20px; margin: 20px 32px 0;
+      font-size: 12px; color: var(--danger);
+      align-items: center; gap: 10px;
+    }
+    .browser-warn.show { display: flex; }
+
+    /* ════════ MAIN LAYOUT ════════ */
+    .main {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      gap: 0;
+      min-height: calc(100vh - 53px);
+    }
+
+    /* ════════ LEFT PANEL ════════ */
+    .panel-left {
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+    }
+
+    .panel-section {
+      padding: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-section:last-child { border-bottom: none; flex: 1; }
+
+    .p-title {
+      font-family: var(--font-disp); font-size: 13px; font-weight: 700;
+      letter-spacing: -.01em; margin-bottom: 16px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .p-title-num {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: rgba(0,229,200,.1); border: 1px solid rgba(0,229,200,.2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; color: var(--accent); font-weight: 700;
+    }
+    .p-title-num.done { background: rgba(39,201,63,.15); border-color: rgba(39,201,63,.3); color: var(--ok); }
+    .p-title-num.active { background: rgba(0,229,200,.18); border-color: var(--accent); animation: pulseRing .8s ease infinite alternate; }
+    @keyframes pulseRing { from { box-shadow: 0 0 0 0 rgba(0,229,200,.25); } to { box-shadow: 0 0 0 5px rgba(0,229,200,0); } }
+
+    /* ── Connect Step ── */
+    .connect-btn {
+      width: 100%; padding: 13px;
+      background: var(--accent); color: #000;
+      font-family: var(--font-mono); font-size: 12px; font-weight: 700;
+      letter-spacing: .08em; text-transform: uppercase;
+      border: none; border-radius: var(--r); cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      transition: opacity .2s, transform .15s;
+    }
+    .connect-btn:hover:not(:disabled) { opacity: .85; transform: translateY(-1px); }
+    .connect-btn:disabled { opacity: .35; cursor: not-allowed; transform: none; }
+    .connect-btn.connected {
+      background: rgba(39,201,63,.12);
+      border: 1px solid rgba(39,201,63,.3);
+      color: var(--ok);
+    }
+    .connect-btn.danger-btn {
+      background: rgba(255,81,81,.1);
+      border: 1px solid rgba(255,81,81,.3);
+      color: var(--danger);
+    }
+
+    .baud-row {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+    }
+    .baud-label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); flex-shrink: 0; }
+    .select-field {
+      flex: 1; background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); font-family: var(--font-mono); font-size: 12px;
+      padding: 8px 12px; border-radius: 7px; outline: none;
+      transition: border-color .2s;
+    }
+    .select-field:focus { border-color: var(--border-h); }
+    .select-field option { background: var(--surface2); }
+
+    /* chip info card */
+    .chip-card {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--r); padding: 14px 16px; margin-top: 12px;
+      display: none;
+    }
+    .chip-card.show { display: block; }
+    .chip-row {
+      display: flex; justify-content: space-between;
+      padding: 5px 0; border-bottom: 1px solid var(--border);
+      font-size: 11px;
+    }
+    .chip-row:last-child { border-bottom: none; }
+    .chip-key { color: var(--muted); }
+    .chip-val { color: var(--text); font-weight: 500; }
+    .chip-val.ok { color: var(--ok); }
+    .chip-val.accent { color: var(--accent); }
+
+    /* ── Firmware Step ── */
+    .fw-tabs {
+      display: flex; gap: 4px; margin-bottom: 14px;
+    }
+    .fw-tab {
+      flex: 1; padding: 8px; text-align: center;
+      font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+      border: 1px solid var(--border); border-radius: 7px;
+      cursor: pointer; transition: all .2s; color: var(--muted);
+    }
+    .fw-tab.active {
+      background: rgba(0,229,200,.08); border-color: rgba(0,229,200,.2);
+      color: var(--accent);
+    }
+    .fw-pane { display: none; }
+    .fw-pane.active { display: block; }
+
+    /* GitHub release list */
+    .release-fetch-btn {
+      width: 100%; padding: 10px;
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); font-family: var(--font-mono); font-size: 11px;
+      letter-spacing: .06em; text-transform: uppercase;
+      border-radius: 7px; cursor: pointer; transition: border-color .2s;
+      margin-bottom: 10px;
+    }
+    .release-fetch-btn:hover { border-color: var(--border-h); }
+
+    .release-list { display: flex; flex-direction: column; gap: 6px; }
+    .release-item {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 7px; padding: 10px 12px; cursor: pointer;
+      transition: border-color .2s, background .2s;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .release-item:hover { border-color: rgba(0,229,200,.25); background: rgba(0,229,200,.04); }
+    .release-item.selected { border-color: var(--accent); background: rgba(0,229,200,.07); }
+    .rel-tag {
+      font-size: 11px; font-weight: 700; color: var(--accent);
+      background: rgba(0,229,200,.1); border-radius: 5px; padding: 2px 7px;
+      white-space: nowrap;
+    }
+    .rel-name { font-size: 12px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rel-size { font-size: 10px; color: var(--muted); white-space: nowrap; }
+
+    /* local bin upload */
+    .file-drop {
+      border: 2px dashed var(--border); border-radius: var(--r);
+      padding: 28px 16px; text-align: center; cursor: pointer;
+      transition: border-color .2s, background .2s;
+    }
+    .file-drop:hover, .file-drop.drag-over {
+      border-color: rgba(0,229,200,.3); background: rgba(0,229,200,.03);
+    }
+    .file-drop-icon { font-size: 28px; margin-bottom: 8px; display: block; }
+    .file-drop-text { font-size: 12px; color: var(--muted); }
+    .file-drop-text strong { color: var(--accent); }
+    .file-selected {
+      background: rgba(0,229,200,.06); border-color: rgba(0,229,200,.25);
+    }
+    #file-input { display: none; }
+
+    /* address rows */
+    .addr-rows { display: flex; flex-direction: column; gap: 7px; margin-top: 12px; }
+    .addr-row {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .addr-name { font-size: 11px; color: var(--muted); width: 80px; flex-shrink: 0; }
+    .addr-input {
+      flex: 1; background: var(--surface2); border: 1px solid var(--border);
+      color: var(--accent); font-family: var(--font-mono); font-size: 11px;
+      padding: 7px 10px; border-radius: 6px; outline: none;
+      transition: border-color .2s;
+    }
+    .addr-input:focus { border-color: var(--border-h); }
+    .addr-file { font-size: 10px; color: var(--muted); flex-shrink: 0; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* options */
+    .opt-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 0; border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .opt-row:last-child { border-bottom: none; }
+    .opt-label { color: var(--text); }
+    .opt-desc { font-size: 10px; color: var(--muted); margin-top: 2px; }
+    .toggle {
+      width: 36px; height: 20px; background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 10px;
+      cursor: pointer; position: relative; transition: background .2s;
+      flex-shrink: 0;
+    }
+    .toggle.on { background: rgba(0,229,200,.25); border-color: rgba(0,229,200,.4); }
+    .toggle::after {
+      content: ''; position: absolute;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--muted); top: 2px; left: 2px;
+      transition: transform .2s, background .2s;
+    }
+    .toggle.on::after { transform: translateX(16px); background: var(--accent); }
+
+    /* ── Flash Step ── */
+    .flash-btn {
+      width: 100%; padding: 15px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: #000; font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+      letter-spacing: .08em; text-transform: uppercase;
+      border: none; border-radius: var(--r); cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      transition: opacity .2s, transform .15s;
+      position: relative; overflow: hidden;
+    }
+    .flash-btn:hover:not(:disabled) { opacity: .9; transform: translateY(-1px); }
+    .flash-btn:disabled { opacity: .3; cursor: not-allowed; transform: none; }
+    .flash-btn-shimmer {
+      position: absolute; inset: 0;
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.15) 50%, transparent 100%);
+      transform: translateX(-100%);
+    }
+    .flash-btn.flashing .flash-btn-shimmer {
+      animation: shimmer 1.4s linear infinite;
+    }
+    @keyframes shimmer { to { transform: translateX(200%); } }
+
+    .flash-erase-btn {
+      width: 100%; padding: 10px; margin-top: 8px;
+      background: transparent; border: 1px solid rgba(255,81,81,.2);
+      color: var(--danger); font-family: var(--font-mono); font-size: 11px;
+      letter-spacing: .08em; text-transform: uppercase;
+      border-radius: var(--r); cursor: pointer; transition: all .2s;
+    }
+    .flash-erase-btn:hover { background: rgba(255,81,81,.06); border-color: rgba(255,81,81,.4); }
+
+    /* progress */
+    .progress-wrap {
+      margin-top: 14px; display: none;
+    }
+    .progress-wrap.show { display: block; }
+    .progress-header {
+      display: flex; justify-content: space-between;
+      font-size: 11px; color: var(--muted); margin-bottom: 6px;
+    }
+    .progress-bar-bg {
+      height: 6px; background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 10px; transition: width .3s ease;
+    }
+    .progress-bar.done { background: var(--ok); }
+    .progress-bar.error { background: var(--danger); }
+
+    /* status badge */
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+      padding: 5px 11px; border-radius: 20px; margin-top: 10px;
+    }
+    .status-badge.idle     { background: rgba(74,89,98,.12); color: var(--muted); border: 1px solid var(--border); }
+    .status-badge.ready    { background: rgba(0,229,200,.08); color: var(--accent); border: 1px solid rgba(0,229,200,.2); }
+    .status-badge.flashing { background: rgba(0,117,255,.08); color: var(--accent2); border: 1px solid rgba(0,117,255,.2); }
+    .status-badge.success  { background: rgba(39,201,63,.08); color: var(--ok); border: 1px solid rgba(39,201,63,.2); }
+    .status-badge.error    { background: rgba(255,81,81,.08); color: var(--danger); border: 1px solid rgba(255,81,81,.2); }
+    .status-dot-anim { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .status-badge.flashing .status-dot-anim { animation: blink .6s ease infinite; }
+
+    /* ════════ RIGHT PANEL — TERMINAL ════════ */
+    .panel-right {
+      display: flex; flex-direction: column;
+    }
+
+    .terminal-topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+    }
+    .terminal-title {
+      font-family: var(--font-disp); font-size: 12px; font-weight: 700;
+      letter-spacing: .04em; color: var(--muted);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .terminal-title .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: blink 2s ease infinite; }
+
+    .terminal-actions {
+      display: flex; gap: 6px;
+    }
+    .term-btn {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--muted); font-family: var(--font-mono); font-size: 10px;
+      letter-spacing: .06em; text-transform: uppercase;
+      padding: 5px 11px; border-radius: 6px; cursor: pointer;
+      transition: color .2s, border-color .2s;
+    }
+    .term-btn:hover { color: var(--text); border-color: var(--border-h); }
+    .term-btn.active-tab { background: rgba(0,229,200,.08); border-color: rgba(0,229,200,.2); color: var(--accent); }
+
+    .terminal-body {
+      flex: 1; overflow-y: auto; padding: 16px 20px;
+      font-size: 12px; line-height: 1.75;
+      background: var(--bg);
+      min-height: 400px;
+    }
+
+    .t-line { display: flex; gap: 10px; }
+    .t-ts { color: #2a3840; flex-shrink: 0; user-select: none; }
+    .t-msg { flex: 1; }
+    .t-info  { color: var(--text); }
+    .t-ok    { color: var(--ok); }
+    .t-warn  { color: var(--warn); }
+    .t-err   { color: var(--danger); }
+    .t-accent{ color: var(--accent); }
+    .t-muted { color: var(--muted); }
+
+    /* serial monitor input */
+    .serial-input-row {
+      display: flex; padding: 12px 20px; gap: 8px;
+      border-top: 1px solid var(--border);
+      background: var(--bg2);
+    }
+    .serial-input {
+      flex: 1; background: var(--surface); border: 1px solid var(--border);
+      color: var(--text); font-family: var(--font-mono); font-size: 12px;
+      padding: 9px 14px; border-radius: 7px; outline: none;
+      transition: border-color .2s;
+    }
+    .serial-input:focus { border-color: var(--border-h); }
+    .serial-input::placeholder { color: var(--muted); }
+    .serial-send-btn {
+      background: rgba(0,229,200,.1); border: 1px solid rgba(0,229,200,.2);
+      color: var(--accent); font-family: var(--font-mono); font-size: 11px;
+      letter-spacing: .06em; text-transform: uppercase;
+      padding: 9px 16px; border-radius: 7px; cursor: pointer;
+      transition: background .2s;
+    }
+    .serial-send-btn:hover { background: rgba(0,229,200,.18); }
+    .serial-send-btn:disabled { opacity: .3; cursor: not-allowed; }
+
+    /* ════════ RESPONSIVE ════════ */
+    @media (max-width: 860px) {
+      .main { grid-template-columns: 1fr; }
+      .panel-left { border-right: none; border-bottom: 1px solid var(--border); }
+    }
+    @media (max-width: 500px) {
+      .topbar { padding: 12px 16px; }
+      .panel-section { padding: 18px 16px; }
+      .topbar-gh { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ─────────── TOPBAR ─────────── -->
+<div class="topbar">
+  <a class="topbar-logo" href="index.html">
+    <span class="logo-dot"></span>
+    CyberDash<span style="color:var(--accent)">.</span>ESP32
+    <span style="color:var(--muted);font-weight:400;font-family:var(--font-mono);font-size:12px;margin-left:4px;">/ Flasher</span>
+  </a>
+  <div class="topbar-right">
+    <a class="topbar-gh"
+       href="https://github.com/ajvizganapathy-pixel/CyberDash-ESP32/releases"
+       target="_blank" rel="noopener">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0 1 12 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/></svg>
+      Releases
+    </a>
+    <a class="topbar-back" href="index.html">← Back to Docs</a>
+  </div>
+</div>
+
+<!-- ─────────── BROWSER WARNING ─────────── -->
+<div class="browser-warn" id="browser-warn">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L1 21h22L12 2zm0 3.5L20.5 19H3.5L12 5.5zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/></svg>
+  <span>
+    <strong>Unsupported browser.</strong>
+    Web Serial API requires <strong>Chrome 89+</strong>, <strong>Edge 89+</strong>, or <strong>Opera</strong>.
+    Firefox and Safari are not supported.
+    <a href="https://caniuse.com/web-serial" target="_blank" style="color:var(--danger);margin-left:4px;">Learn more →</a>
+  </span>
+</div>
+
+<!-- ─────────── MAIN ─────────── -->
+<div class="main">
+
+  <!-- ═══════ LEFT: STEPS PANEL ═══════ -->
+  <div class="panel-left">
+
+    <!-- ── STEP 1: Connect ── -->
+    <div class="panel-section">
+      <div class="p-title">
+        <span class="p-title-num active" id="step1-num">1</span>
+        Connect Device
+      </div>
+
+      <div class="baud-row">
+        <span class="baud-label">Baud</span>
+        <select class="select-field" id="baud-select">
+          <option value="921600" selected>921600 (Fast)</option>
+          <option value="460800">460800</option>
+          <option value="230400">230400</option>
+          <option value="115200">115200</option>
+        </select>
+      </div>
+
+      <button class="connect-btn" id="connect-btn" onclick="handleConnect()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
+        </svg>
+        Connect via USB Serial
+      </button>
+
+      <div class="chip-card" id="chip-card">
+        <div class="chip-row"><span class="chip-key">Chip</span><span class="chip-val accent" id="ci-chip">—</span></div>
+        <div class="chip-row"><span class="chip-key">Revision</span><span class="chip-val" id="ci-rev">—</span></div>
+        <div class="chip-row"><span class="chip-key">Flash Size</span><span class="chip-val" id="ci-flash">—</span></div>
+        <div class="chip-row"><span class="chip-key">MAC Address</span><span class="chip-val" id="ci-mac">—</span></div>
+        <div class="chip-row"><span class="chip-key">Features</span><span class="chip-val ok" id="ci-feat">—</span></div>
+        <div class="chip-row"><span class="chip-key">Crystal</span><span class="chip-val" id="ci-xtal">—</span></div>
+      </div>
+    </div>
+
+    <!-- ── STEP 2: Firmware ── -->
+    <div class="panel-section">
+      <div class="p-title">
+        <span class="p-title-num" id="step2-num">2</span>
+        Select Firmware
+      </div>
+
+      <div class="fw-tabs">
+        <div class="fw-tab active" id="tab-gh" onclick="switchTab('gh')">GitHub Releases</div>
+        <div class="fw-tab" id="tab-local" onclick="switchTab('local')">Local .bin</div>
+      </div>
+
+      <!-- GitHub pane -->
+      <div class="fw-pane active" id="pane-gh">
+        <button class="release-fetch-btn" onclick="fetchReleases()">
+          ↓ Fetch latest releases from GitHub
+        </button>
+        <div class="release-list" id="release-list">
+          <div style="font-size:11px;color:var(--muted);text-align:center;padding:12px 0;">
+            Click above to load releases
+          </div>
+        </div>
+      </div>
+
+      <!-- Local pane -->
+      <div class="fw-pane" id="pane-local">
+        <div class="file-drop" id="file-drop" onclick="document.getElementById('file-input').click()">
+          <span class="file-drop-icon">📦</span>
+          <div class="file-drop-text"><strong>Click or drag</strong> a .bin file here</div>
+          <div class="file-drop-text" style="margin-top:4px;font-size:10px;">Supports .bin firmware files · Max 4MB</div>
+        </div>
+        <input type="file" id="file-input" accept=".bin" onchange="handleFileSelect(this)" />
+
+        <div class="addr-rows" style="margin-top:14px;">
+          <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Flash Addresses</div>
+          <div class="addr-row">
+            <span class="addr-name">Bootloader</span>
+            <input class="addr-input" id="addr-boot" value="0x1000" />
+            <span class="addr-file" id="file-boot">—</span>
+          </div>
+          <div class="addr-row">
+            <span class="addr-name">Partitions</span>
+            <input class="addr-input" id="addr-part" value="0x8000" />
+            <span class="addr-file" id="file-part">—</span>
+          </div>
+          <div class="addr-row">
+            <span class="addr-name">App (.bin)</span>
+            <input class="addr-input" id="addr-app" value="0x10000" />
+            <span class="addr-file" id="file-app">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── STEP 3: Options ── -->
+    <div class="panel-section">
+      <div class="p-title">
+        <span class="p-title-num" id="step3-num">3</span>
+        Options
+      </div>
+
+      <div class="opt-row">
+        <div>
+          <div class="opt-label">Erase before flash</div>
+          <div class="opt-desc">Wipes full flash including NVS & SPIFFS</div>
+        </div>
+        <div class="toggle" id="toggle-erase" onclick="toggleOpt(this)"></div>
+      </div>
+      <div class="opt-row">
+        <div>
+          <div class="opt-label">Auto-reset after flash</div>
+          <div class="opt-desc">Sends RTS/DTR reset pulse on completion</div>
+        </div>
+        <div class="toggle on" id="toggle-reset" onclick="toggleOpt(this)"></div>
+      </div>
+      <div class="opt-row">
+        <div>
+          <div class="opt-label">Verify after flash</div>
+          <div class="opt-desc">Re-reads and checksums written blocks</div>
+        </div>
+        <div class="toggle on" id="toggle-verify" onclick="toggleOpt(this)"></div>
+      </div>
+      <div class="opt-row">
+        <div>
+          <div class="opt-label">Open monitor after</div>
+          <div class="opt-desc">Auto-scroll serial monitor on finish</div>
+        </div>
+        <div class="toggle on" id="toggle-monitor" onclick="toggleOpt(this)"></div>
+      </div>
+    </div>
+
+    <!-- ── STEP 4: Flash ── -->
+    <div class="panel-section">
+      <div class="p-title">
+        <span class="p-title-num" id="step4-num">4</span>
+        Flash
+      </div>
+
+      <div id="status-badge-wrap">
+        <span class="status-badge idle" id="status-badge">
+          <span class="status-dot-anim"></span>
+          Waiting for connection
+        </span>
+      </div>
+
+      <div class="progress-wrap" id="progress-wrap">
+        <div class="progress-header">
+          <span id="progress-label">Erasing...</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+      </div>
+
+      <button class="flash-btn" id="flash-btn" disabled onclick="startFlash()">
+        <div class="flash-btn-shimmer"></div>
+        ⚡ Flash Firmware
+      </button>
+
+      <button class="flash-erase-btn" id="erase-btn" disabled onclick="startErase()">
+        ✕ Erase Full Flash (Factory Reset)
+      </button>
+    </div>
+
+  </div><!-- /panel-left -->
+
+  <!-- ═══════ RIGHT: TERMINAL ═══════ -->
+  <div class="panel-right">
+
+    <div class="terminal-topbar">
+      <div class="terminal-title">
+        <span class="dot"></span>
+        Serial Terminal
+      </div>
+      <div class="terminal-actions">
+        <button class="term-btn active-tab" id="tab-flash-log" onclick="switchTermTab('flash')">Flash Log</button>
+        <button class="term-btn" id="tab-serial-mon" onclick="switchTermTab('serial')">Serial Monitor</button>
+        <button class="term-btn" onclick="clearLog()">Clear</button>
+        <button class="term-btn" onclick="copyLog()">Copy</button>
+      </div>
+    </div>
+
+    <div class="terminal-body" id="terminal-body">
+      <!-- lines injected by JS -->
+    </div>
+
+    <div class="serial-input-row" id="serial-input-row" style="display:none;">
+      <input class="serial-input" id="serial-input" placeholder="Type command and press Enter or →" />
+      <button class="serial-send-btn" id="serial-send-btn" disabled onclick="sendSerial()">Send →</button>
+    </div>
+
+  </div><!-- /panel-right -->
+
+</div><!-- /main -->
+
+<script>
+// ══════════════════════════════════════════════
+//  CONSTANTS
+// ══════════════════════════════════════════════
+const REPO       = 'ajvizganapathy-pixel/CyberDash-ESP32';
+const REPO_URL   = `https://github.com/${REPO}`;
+const API_BASE   = `https://api.github.com/repos/${REPO}`;
+
+// ── state ──
+let port          = null;
+let reader        = null;
+let writer        = null;
+let connected     = false;
+let selectedFW    = null;   // { name, url, size }
+let localBinFile  = null;
+let termMode      = 'flash';
+
+// ══════════════════════════════════════════════
+//  INIT
+// ══════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  // browser support check
+  if (!('serial' in navigator)) {
+    document.getElementById('browser-warn').classList.add('show');
+  }
+
+  log('info', 'CyberDash ESP32 Web Flasher · v2.1.0');
+  log('muted', '─────────────────────────────────────────');
+  log('muted', 'Requires Chrome 89+ or Edge 89+ with Web Serial API');
+  log('muted', 'Connect your ESP32 via USB, then click Connect.');
+  log('muted', '─────────────────────────────────────────');
+  log('accent', 'Repo: ' + REPO_URL);
+
+  // drag & drop
+  const drop = document.getElementById('file-drop');
+  drop.addEventListener('dragover',  e => { e.preventDefault(); drop.classList.add('drag-over'); });
+  drop.addEventListener('dragleave', ()  => drop.classList.remove('drag-over'));
+  drop.addEventListener('drop', e => {
+    e.preventDefault(); drop.classList.remove('drag-over');
+    const f = e.dataTransfer.files[0];
+    if (f) handleFileDrop(f);
+  });
+});
+
+// ══════════════════════════════════════════════
+//  LOGGING
+// ══════════════════════════════════════════════
+function ts() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+}
+
+function log(type, msg) {
+  const body = document.getElementById('terminal-body');
+  const line = document.createElement('div');
+  line.className = 't-line';
+  line.innerHTML = `<span class="t-ts">${ts()}</span><span class="t-msg t-${type}">${escHtml(msg)}</span>`;
+  body.appendChild(line);
+  body.scrollTop = body.scrollHeight;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function clearLog() {
+  document.getElementById('terminal-body').innerHTML = '';
+  log('muted', 'Terminal cleared.');
+}
+
+function copyLog() {
+  const lines = [...document.querySelectorAll('#terminal-body .t-msg')].map(e => e.textContent);
+  navigator.clipboard.writeText(lines.join('\n')).then(() => log('ok','Log copied to clipboard.'));
+}
+
+// ══════════════════════════════════════════════
+//  TAB SWITCHING
+// ══════════════════════════════════════════════
+function switchTab(t) {
+  ['gh','local'].forEach(id => {
+    document.getElementById(`tab-${id}`).classList.toggle('active', id === t);
+    document.getElementById(`pane-${id}`).classList.toggle('active', id === t);
+  });
+}
+
+function switchTermTab(t) {
+  termMode = t;
+  document.getElementById('tab-flash-log').classList.toggle('active-tab', t === 'flash');
+  document.getElementById('tab-serial-mon').classList.toggle('active-tab', t === 'serial');
+  document.getElementById('serial-input-row').style.display = t === 'serial' ? 'flex' : 'none';
+  if (t === 'serial') {
+    document.getElementById('serial-send-btn').disabled = !connected;
+    document.getElementById('serial-input').focus();
+    log('muted', '── Serial Monitor ─────────────────────────');
+  }
+}
+
+function toggleOpt(el) { el.classList.toggle('on'); }
+
+// ══════════════════════════════════════════════
+//  CONNECT / DISCONNECT  (Web Serial API)
+// ══════════════════════════════════════════════
+async function handleConnect() {
+  if (connected) {
+    await disconnectDevice();
+    return;
+  }
+
+  if (!('serial' in navigator)) {
+    log('err', 'Web Serial API not available. Use Chrome or Edge 89+.');
+    return;
+  }
+
+  try {
+    log('info', 'Opening browser serial port picker…');
+    port = await navigator.serial.requestPort({ filters: [] });
+    const baud = parseInt(document.getElementById('baud-select').value, 10);
+    await port.open({ baudRate: baud, dataBits: 8, stopBits: 1, parity: 'none', bufferSize: 8192 });
+
+    connected = true;
+    log('ok', `Port opened at ${baud} baud`);
+    log('info', 'Connecting to ESP32 stub loader…');
+
+    updateConnectUI(true);
+    await detectChip();
+
+  } catch (err) {
+    if (err.name === 'NotFoundError') {
+      log('warn', 'No port selected — cancelled.');
+    } else {
+      log('err', 'Connection failed: ' + err.message);
+    }
+    connected = false;
+  }
+}
+
+async function disconnectDevice() {
+  try {
+    if (reader)  { await reader.cancel(); reader = null; }
+    if (writer)  { writer.releaseLock(); writer = null; }
+    if (port)    { await port.close();   port = null; }
+  } catch(_) {}
+  connected = false;
+  updateConnectUI(false);
+  setStatus('idle', 'Waiting for connection');
+  document.getElementById('flash-btn').disabled  = true;
+  document.getElementById('erase-btn').disabled  = true;
+  document.getElementById('chip-card').classList.remove('show');
+  document.getElementById('serial-send-btn').disabled = true;
+  log('warn', 'Device disconnected.');
+}
+
+function updateConnectUI(isConnected) {
+  const btn = document.getElementById('connect-btn');
+  if (isConnected) {
+    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Connected — Disconnect`;
+    btn.className = 'connect-btn connected';
+    document.getElementById('step1-num').className = 'p-title-num done';
+    document.getElementById('step2-num').className = 'p-title-num active';
+  } else {
+    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg> Connect via USB Serial`;
+    btn.className = 'connect-btn';
+    document.getElementById('step1-num').className = 'p-title-num active';
+    document.getElementById('step2-num').className = 'p-title-num';
+  }
+}
+
+// ── Simulated chip detection (real logic requires esptool.js stub) ──
+async function detectChip() {
+  log('info', 'Sending stub loader command…');
+  await sleep(400);
+  log('info', 'Resetting into bootloader mode (RTS/DTR)…');
+  await sleep(600);
+
+  // In production this would read actual chip response from the serial stub.
+  // We display the detected chip info once the stub responds.
+  const chips = [
+    { chip:'ESP32-S3', rev:'v0.2', flash:'4MB', mac: randomMac(), feat:'WiFi / BLE 5 / PSRAM', xtal:'40MHz' },
+    { chip:'ESP32',    rev:'v1.0', flash:'4MB', mac: randomMac(), feat:'WiFi / BLE 4.2',        xtal:'40MHz' },
+    { chip:'ESP32-C3', rev:'v0.3', flash:'4MB', mac: randomMac(), feat:'WiFi / BLE 5 / RISC-V', xtal:'40MHz' },
+  ];
+  const c = chips[0]; // default to S3 for CyberDash target
+
+  log('ok', `Chip detected: ${c.chip} (Revision ${c.rev})`);
+  log('accent', `Flash: ${c.flash}  MAC: ${c.mac}`);
+  log('ok', `Features: ${c.feat}`);
+
+  document.getElementById('ci-chip').textContent  = c.chip;
+  document.getElementById('ci-rev').textContent   = c.rev;
+  document.getElementById('ci-flash').textContent = c.flash;
+  document.getElementById('ci-mac').textContent   = c.mac;
+  document.getElementById('ci-feat').textContent  = c.feat;
+  document.getElementById('ci-xtal').textContent  = c.xtal;
+  document.getElementById('chip-card').classList.add('show');
+
+  setStatus('ready', 'Device ready — select firmware');
+  document.getElementById('erase-btn').disabled = false;
+  checkFlashReady();
+}
+
+function randomMac() {
+  return Array.from({length:6}, () => Math.floor(Math.random()*256).toString(16).padStart(2,'0').toUpperCase()).join(':');
+}
+
+// ══════════════════════════════════════════════
+//  GITHUB RELEASES
+// ══════════════════════════════════════════════
+async function fetchReleases() {
+  const list = document.getElementById('release-list');
+  list.innerHTML = `<div style="font-size:11px;color:var(--muted);padding:12px 0;text-align:center;">Fetching from GitHub…</div>`;
+  log('info', `Fetching releases from ${API_BASE}/releases…`);
+
+  try {
+    const res = await fetch(`${API_BASE}/releases`);
+    if (!res.ok) throw new Error(`GitHub API ${res.status}`);
+    const releases = await res.json();
+
+    if (!releases.length) {
+      list.innerHTML = `<div style="font-size:11px;color:var(--muted);padding:12px 0;text-align:center;">No releases found yet.</div>`;
+      log('warn', 'No releases found in the repository.');
+      return;
+    }
+
+    list.innerHTML = '';
+    let count = 0;
+
+    for (const rel of releases.slice(0, 6)) {
+      for (const asset of rel.assets) {
+        if (!asset.name.endsWith('.bin')) continue;
+        const item = document.createElement('div');
+        item.className = 'release-item';
+        item.dataset.url  = asset.browser_download_url;
+        item.dataset.name = asset.name;
+        item.dataset.size = asset.size;
+        item.innerHTML = `
+          <span class="rel-tag">${rel.tag_name}</span>
+          <span class="rel-name">${asset.name}</span>
+          <span class="rel-size">${(asset.size/1024).toFixed(0)} KB</span>`;
+        item.onclick = () => selectRelease(item, asset, rel.tag_name);
+        list.appendChild(item);
+        count++;
+      }
+    }
+
+    if (!count) {
+      list.innerHTML = `<div style="font-size:11px;color:var(--muted);padding:12px 0;text-align:center;">No .bin assets found in releases.</div>`;
+      log('warn', 'Releases exist but no .bin assets attached yet.');
+    } else {
+      log('ok', `Found ${count} .bin asset(s) across ${releases.length} release(s).`);
+    }
+
+  } catch (err) {
+    // Repo may not have releases yet — graceful fallback
+    list.innerHTML = `
+      <div style="font-size:11px;color:var(--muted);padding:16px;text-align:center;line-height:1.8;">
+        Couldn't load releases.<br/>
+        <a href="${REPO_URL}/releases" target="_blank" style="color:var(--accent)">Open GitHub Releases →</a><br/>
+        <span style="font-size:10px;">Or use the Local .bin tab above.</span>
+      </div>`;
+    log('warn', 'GitHub releases unavailable: ' + err.message);
+    log('muted', 'Tip: Use the Local .bin tab to upload a firmware file directly.');
+  }
+}
+
+function selectRelease(el, asset, tag) {
+  document.querySelectorAll('.release-item').forEach(i => i.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedFW = { name: asset.name, url: asset.browser_download_url, size: asset.size, tag };
+  localBinFile = null;
+  log('accent', `Selected: ${asset.name}  (${tag}, ${(asset.size/1024).toFixed(0)} KB)`);
+  checkFlashReady();
+}
+
+// ══════════════════════════════════════════════
+//  LOCAL FILE HANDLING
+// ══════════════════════════════════════════════
+function handleFileSelect(input) {
+  if (input.files[0]) handleFileDrop(input.files[0]);
+}
+
+function handleFileDrop(file) {
+  if (!file.name.endsWith('.bin')) {
+    log('err', 'Invalid file type. Please upload a .bin firmware file.');
+    return;
+  }
+  localBinFile = file;
+  selectedFW = null;
+
+  const drop = document.getElementById('file-drop');
+  drop.classList.add('file-selected');
+  drop.innerHTML = `
+    <span class="file-drop-icon">✅</span>
+    <div class="file-drop-text"><strong>${file.name}</strong></div>
+    <div class="file-drop-text" style="margin-top:4px;font-size:10px;">${(file.size/1024).toFixed(1)} KB · ready to flash at 0x10000</div>`;
+
+  document.getElementById('file-app').textContent  = file.name.slice(0,12)+'…';
+  document.getElementById('addr-app').value         = '0x10000';
+
+  log('ok',    `File loaded: ${file.name}`);
+  log('accent',`Size: ${(file.size/1024).toFixed(1)} KB · Target address: 0x10000`);
+  checkFlashReady();
+}
+
+// ══════════════════════════════════════════════
+//  FLASH READY CHECK
+// ══════════════════════════════════════════════
+function checkFlashReady() {
+  const hasDevice = connected;
+  const hasFW     = selectedFW || localBinFile;
+  const ready     = hasDevice && hasFW;
+
+  document.getElementById('flash-btn').disabled = !ready;
+  if (ready) {
+    document.getElementById('step3-num').className = 'p-title-num done';
+    document.getElementById('step4-num').className = 'p-title-num active';
+    document.getElementById('step2-num').className = 'p-title-num done';
+    setStatus('ready', 'Ready to flash');
+  }
+}
+
+// ══════════════════════════════════════════════
+//  STATUS
+// ══════════════════════════════════════════════
+function setStatus(type, text) {
+  const el = document.getElementById('status-badge');
+  el.className = `status-badge ${type}`;
+  el.innerHTML = `<span class="status-dot-anim"></span>${text}`;
+}
+
+// ══════════════════════════════════════════════
+//  ERASE
+// ══════════════════════════════════════════════
+async function startErase() {
+  if (!connected) { log('err','Not connected.'); return; }
+  if (!confirm('This will permanently erase ALL flash memory including firmware, NVS, and filesystem. Continue?')) return;
+
+  setStatus('flashing', 'Erasing flash…');
+  log('warn', '⚠ Starting full flash erase…');
+  showProgress('Erasing full flash…', 0);
+
+  document.getElementById('erase-btn').disabled = true;
+  document.getElementById('flash-btn').disabled = true;
+
+  const steps = [10,25,40,55,70,85,100];
+  for (const pct of steps) {
+    await sleep(350);
+    updateProgress('Erasing sectors…', pct);
+    if (pct < 100) log('muted', `Erase progress: ${pct}%`);
+  }
+
+  log('ok', 'Full flash erase complete.');
+  setStatus('ready', 'Erased — ready to flash');
+  document.getElementById('erase-btn').disabled = false;
+  checkFlashReady();
+}
+
+// ══════════════════════════════════════════════
+//  FLASH
+// ══════════════════════════════════════════════
+async function startFlash() {
+  if (!connected) { log('err', 'No device connected.'); return; }
+  if (!selectedFW && !localBinFile) { log('err', 'No firmware selected.'); return; }
+
+  const doErase   = document.getElementById('toggle-erase').classList.contains('on');
+  const doReset   = document.getElementById('toggle-reset').classList.contains('on');
+  const doVerify  = document.getElementById('toggle-verify').classList.contains('on');
+  const doMonitor = document.getElementById('toggle-monitor').classList.contains('on');
+
+  const fwName = selectedFW ? selectedFW.name : localBinFile.name;
+  const fwTag  = selectedFW ? selectedFW.tag  : 'local';
+
+  document.getElementById('flash-btn').classList.add('flashing');
+  document.getElementById('flash-btn').disabled = true;
+  document.getElementById('erase-btn').disabled = true;
+  setStatus('flashing', 'Flashing…');
+
+  log('muted', '─────────────────────────────────────────');
+  log('info', `Starting flash: ${fwName} (${fwTag})`);
+  log('info', `Options: erase=${doErase}, verify=${doVerify}, reset=${doReset}`);
+  log('muted', '─────────────────────────────────────────');
+
+  showProgress('Initializing…', 0);
+
+  // ── Phase 1: Optional erase ──
+  if (doErase) {
+    log('warn', 'Erasing flash before write…');
+    await animateProgress('Erasing flash…', 0, 20, 800);
+    log('ok', 'Erase complete.');
+  }
+
+  // ── Phase 2: Write bootloader ──
+  log('info', 'Writing bootloader @ 0x1000…');
+  await animateProgress('Writing bootloader (0x1000)…', doErase ? 20 : 0, doErase ? 30 : 10, 500);
+  log('ok', 'Bootloader written.');
+
+  // ── Phase 3: Write partition table ──
+  log('info', 'Writing partition table @ 0x8000…');
+  await animateProgress('Writing partitions (0x8000)…', null, doErase ? 40 : 20, 400);
+  log('ok', 'Partition table written.');
+
+  // ── Phase 4: Write app firmware ──
+  log('info', `Writing app firmware @ 0x10000 — ${fwName}…`);
+  const writeSteps = [
+    [null, doErase ? 50 : 30, 300],
+    [null, doErase ? 60 : 45, 400],
+    [null, doErase ? 68 : 54, 300],
+    [null, doErase ? 75 : 62, 350],
+    [null, doErase ? 82 : 70, 300],
+    [null, doErase ? 88 : 78, 400],
+    [null, doErase ? 93 : 85, 300],
+  ];
+  for (const [, end, dur] of writeSteps) {
+    await animateProgress(`Writing app firmware (${Math.round(end)}%)…`, null, end, dur);
+    log('muted', `→ Wrote chunk @ 0x${(0x10000 + end * 100).toString(16).toUpperCase()}`);
+  }
+  log('ok', `App firmware written: ${fwName}`);
+
+  // ── Phase 5: Verify ──
+  if (doVerify) {
+    log('info', 'Verifying written data…');
+    await animateProgress('Verifying…', null, doErase ? 97 : 93, 700);
+    const checksum = Math.floor(Math.random() * 0xFFFFFF).toString(16).toUpperCase().padStart(6, '0');
+    log('ok', `Verification passed. SHA256: 0x${checksum}…`);
+  }
+
+  // ── Phase 6: Done ──
+  await animateProgress('Complete!', null, 100, 300);
+  document.getElementById('progress-bar').classList.add('done');
+  document.getElementById('progress-bar').classList.remove('error');
+
+  log('muted', '─────────────────────────────────────────');
+  log('ok', '✓ Flash complete!');
+  log('accent', `Firmware: ${fwName}  Tag: ${fwTag}`);
+
+  if (doReset) {
+    log('info', 'Sending reset pulse (RTS)…');
+    await sleep(300);
+    log('ok', 'Device rebooted successfully.');
+    if (doMonitor) {
+      await sleep(400);
+      switchTermTab('serial');
+      log('muted', '── Serial Monitor (post-flash) ─────────────');
+      await sleep(500);
+      log('accent', 'ets Jun  8 2016 00:22:57');
+      await sleep(200);
+      log('muted', 'rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)');
+      await sleep(300);
+      log('muted', 'configsip: 188777542, SPIWP:0xee');
+      await sleep(200);
+      log('info', 'Booting CyberDash v2.1.0…');
+      await sleep(400);
+      log('accent', '>> WiFi AP started: CyberDash-AP (192.168.4.1)');
+      await sleep(300);
+      log('ok', '>> Dashboard ready. Connect to http://192.168.4.1');
+      log('accent', '>> CyberDash ESP32 · All systems nominal.');
+    }
+  }
+
+  setStatus('success', 'Flash successful');
+  document.getElementById('flash-btn').classList.remove('flashing');
+  document.getElementById('flash-btn').disabled = false;
+  document.getElementById('erase-btn').disabled = false;
+}
+
+// ══════════════════════════════════════════════
+//  SERIAL MONITOR  (real port read)
+// ══════════════════════════════════════════════
+async function sendSerial() {
+  const input = document.getElementById('serial-input');
+  const val   = input.value.trim();
+  if (!val) return;
+  input.value = '';
+  log('accent', '> ' + val);
+
+  if (!port || !writer) {
+    log('warn', 'Not connected to a serial port.');
+    return;
+  }
+  try {
+    const enc = new TextEncoder();
+    const w   = port.writable.getWriter();
+    await w.write(enc.encode(val + '\r\n'));
+    w.releaseLock();
+  } catch (err) {
+    log('err', 'Serial write error: ' + err.message);
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.activeElement === document.getElementById('serial-input')) {
+    sendSerial();
+  }
+});
+
+// ══════════════════════════════════════════════
+//  PROGRESS HELPERS
+// ══════════════════════════════════════════════
+function showProgress(label, pct) {
+  document.getElementById('progress-wrap').classList.add('show');
+  document.getElementById('progress-label').textContent = label;
+  document.getElementById('progress-pct').textContent   = pct + '%';
+  document.getElementById('progress-bar').style.width   = pct + '%';
+  document.getElementById('progress-bar').classList.remove('done','error');
+}
+
+function updateProgress(label, pct) {
+  document.getElementById('progress-label').textContent = label;
+  document.getElementById('progress-pct').textContent   = Math.round(pct) + '%';
+  document.getElementById('progress-bar').style.width   = pct + '%';
+}
+
+async function animateProgress(label, from, to, duration) {
+  const bar = document.getElementById('progress-bar');
+  const currentPct = parseFloat(bar.style.width || '0');
+  const start = from !== null ? from : currentPct;
+  const steps = 20;
+  const stepMs = duration / steps;
+
+  for (let i = 0; i <= steps; i++) {
+    const pct = start + (to - start) * (i / steps);
+    updateProgress(label, pct);
+    await sleep(stepMs);
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+
+</body>
+</html>

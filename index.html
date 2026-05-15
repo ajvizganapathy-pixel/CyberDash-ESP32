@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CyberDash · ESP32 Network Intelligence</title>
+
+  <!-- Fonts: JetBrains Mono (code/terminal) + Syne (display) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;700;800&display=swap"
+    rel="stylesheet"
+  />
+
+  <style>
+    /* ─────────────────────────────────────────
+       DESIGN TOKENS  (Graphify Labs reference)
+       · Deep void background
+       · Cool-toned node graph accent: #00e5c8  (teal-cyan)
+       · Warm-alert accent:            #ff5151
+       · Surface with subtle borders
+       · Mono stack for data, Syne for display
+    ───────────────────────────────────────── */
+    :root {
+      --bg:         #060809;
+      --bg2:        #0c0f11;
+      --surface:    #101416;
+      --surface2:   #161b1f;
+      --border:     rgba(255,255,255,.06);
+      --border-h:   rgba(0,229,200,.18);
+      --text:       #dde5ea;
+      --muted:      #4a5962;
+      --accent:     #00e5c8;
+      --accent2:    #0075ff;
+      --danger:     #ff5151;
+      --warn:       #ffaa00;
+      --r:          10px;
+      --font-mono:  'JetBrains Mono', monospace;
+      --font-disp:  'Syne', sans-serif;
+    }
+
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 14px;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ── SCROLLBAR ───────────────────────── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 4px; }
+
+    /* ── SELECTION ───────────────────────── */
+    ::selection { background: rgba(0,229,200,.2); }
+
+    /* ════════════════════════════════════════
+       NAV
+    ════════════════════════════════════════ */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 40px;
+      background: rgba(6,8,9,.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      font-family: var(--font-disp); font-weight: 800; font-size: 16px;
+      letter-spacing: -.02em; color: var(--text); text-decoration: none;
+    }
+    .nav-logo-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+      animation: blink 2s ease infinite;
+    }
+    @keyframes blink {
+      0%,100% { opacity: 1; } 50% { opacity: .3; }
+    }
+
+    .nav-links {
+      display: flex; align-items: center; gap: 32px;
+      list-style: none;
+    }
+    .nav-links a {
+      color: var(--muted); text-decoration: none; font-size: 12px;
+      letter-spacing: .08em; text-transform: uppercase;
+      transition: color .2s;
+    }
+    .nav-links a:hover { color: var(--accent); }
+
+    .nav-badge {
+      background: rgba(0,229,200,.08); border: 1px solid rgba(0,229,200,.2);
+      color: var(--accent); font-size: 11px; letter-spacing: .1em;
+      text-transform: uppercase; padding: 6px 14px; border-radius: 20px;
+      cursor: pointer; transition: background .2s;
+    }
+    .nav-badge:hover { background: rgba(0,229,200,.14); }
+
+    /* ════════════════════════════════════════
+       CANVAS — animated graph nodes
+    ════════════════════════════════════════ */
+    #graph-canvas {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      opacity: .35;
+    }
+
+    /* ════════════════════════════════════════
+       HERO
+    ════════════════════════════════════════ */
+    .hero {
+      position: relative; z-index: 1;
+      min-height: 100vh;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; text-align: center;
+      padding: 120px 24px 80px;
+    }
+
+    .hero-tag {
+      display: inline-flex; align-items: center; gap: 8px;
+      border: 1px solid var(--border-h); border-radius: 20px;
+      padding: 6px 16px; margin-bottom: 32px;
+      font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+      color: var(--accent);
+      animation: fadeUp .8s ease both;
+    }
+    .hero-tag-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent); animation: blink 1.5s ease infinite;
+    }
+
+    .hero h1 {
+      font-family: var(--font-disp);
+      font-size: clamp(38px, 7vw, 80px);
+      font-weight: 800; line-height: 1.04;
+      letter-spacing: -.04em;
+      animation: fadeUp .8s .1s ease both;
+    }
+    .hero h1 em {
+      font-style: normal;
+      color: transparent;
+      -webkit-text-stroke: 1px rgba(0,229,200,.5);
+    }
+    .hero h1 .grad {
+      font-style: normal;
+      background: linear-gradient(120deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-sub {
+      max-width: 520px; margin: 24px auto 0;
+      font-size: 14px; color: var(--muted); line-height: 1.8;
+      animation: fadeUp .8s .2s ease both;
+    }
+
+    .hero-actions {
+      display: flex; gap: 12px; margin-top: 40px; justify-content: center;
+      animation: fadeUp .8s .3s ease both;
+    }
+
+    .btn-primary {
+      background: var(--accent); color: #000;
+      font-family: var(--font-mono); font-size: 12px; font-weight: 700;
+      letter-spacing: .08em; text-transform: uppercase;
+      padding: 12px 28px; border-radius: var(--r);
+      border: none; cursor: pointer;
+      transition: opacity .2s, transform .2s;
+    }
+    .btn-primary:hover { opacity: .85; transform: translateY(-1px); }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--muted); border: 1px solid var(--border);
+      font-family: var(--font-mono); font-size: 12px;
+      letter-spacing: .08em; text-transform: uppercase;
+      padding: 12px 28px; border-radius: var(--r);
+      cursor: pointer; transition: border-color .2s, color .2s;
+    }
+    .btn-ghost:hover { border-color: var(--border-h); color: var(--text); }
+
+    /* ─── hero metrics bar ─── */
+    .hero-metrics {
+      display: flex; gap: 0; margin-top: 72px;
+      border: 1px solid var(--border); border-radius: var(--r);
+      overflow: hidden; width: 100%; max-width: 680px;
+      animation: fadeUp .8s .4s ease both;
+    }
+    .metric-item {
+      flex: 1; padding: 20px 24px;
+      border-right: 1px solid var(--border);
+      text-align: left;
+    }
+    .metric-item:last-child { border-right: none; }
+    .metric-val {
+      font-family: var(--font-disp); font-size: 24px; font-weight: 700;
+      color: var(--text); letter-spacing: -.02em;
+    }
+    .metric-val .accent { color: var(--accent); }
+    .metric-label {
+      font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+      color: var(--muted); margin-top: 4px;
+    }
+
+    /* ════════════════════════════════════════
+       SECTION WRAPPER
+    ════════════════════════════════════════ */
+    section {
+      position: relative; z-index: 1;
+      max-width: 1200px; margin: 0 auto;
+      padding: 80px 40px;
+    }
+
+    .section-label {
+      font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+      color: var(--accent); margin-bottom: 12px;
+    }
+    .section-title {
+      font-family: var(--font-disp); font-size: clamp(24px, 3.5vw, 40px);
+      font-weight: 700; letter-spacing: -.03em; line-height: 1.1;
+      margin-bottom: 16px;
+    }
+    .section-sub {
+      font-size: 13px; color: var(--muted); max-width: 500px;
+      line-height: 1.8; margin-bottom: 48px;
+    }
+
+    /* ════════════════════════════════════════
+       DIVIDER
+    ════════════════════════════════════════ */
+    .divider {
+      border: none; height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border), transparent);
+      margin: 0 40px;
+      position: relative; z-index: 1;
+    }
+
+    /* ════════════════════════════════════════
+       DASHBOARD PREVIEW
+    ════════════════════════════════════════ */
+    .dash-preview {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .dash-topbar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 20px;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+    }
+    .dash-topbar .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot-r { background: #ff5e57; }
+    .dot-y { background: #ffbd2e; }
+    .dot-g { background: #27c93f; }
+    .dash-url {
+      flex: 1; text-align: center; font-size: 11px; color: var(--muted);
+      letter-spacing: .05em;
+    }
+
+    .dash-body {
+      display: grid; grid-template-columns: 220px 1fr;
+      min-height: 400px;
+    }
+
+    /* sidebar */
+    .dash-sidebar {
+      background: var(--bg2); border-right: 1px solid var(--border);
+      padding: 20px 16px;
+    }
+    .dash-nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; border-radius: 7px;
+      font-size: 12px; color: var(--muted); cursor: pointer;
+      transition: background .2s, color .2s; margin-bottom: 2px;
+    }
+    .dash-nav-item.active {
+      background: rgba(0,229,200,.08);
+      color: var(--accent); border: 1px solid rgba(0,229,200,.12);
+    }
+    .dash-nav-item:hover:not(.active) { background: var(--surface2); color: var(--text); }
+    .dash-nav-icon { font-size: 14px; }
+
+    .sidebar-section-title {
+      font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+      color: var(--muted); padding: 12px 12px 6px;
+    }
+
+    /* main content */
+    .dash-main { padding: 24px; overflow: auto; }
+
+    .dash-grid-top {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px; margin-bottom: 20px;
+    }
+
+    .stat-card {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--r); padding: 16px;
+    }
+    .stat-card-label {
+      font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 8px;
+    }
+    .stat-card-val {
+      font-family: var(--font-disp); font-size: 22px; font-weight: 700;
+    }
+    .stat-card-val.green { color: #27c93f; }
+    .stat-card-val.cyan { color: var(--accent); }
+    .stat-card-val.orange { color: var(--warn); }
+    .stat-card-val.red { color: var(--danger); }
+    .stat-card-delta {
+      font-size: 10px; color: var(--muted); margin-top: 4px;
+    }
+    .stat-card-delta.up { color: #27c93f; }
+    .stat-card-delta.dn { color: var(--danger); }
+
+    /* packet graph */
+    .packet-graph {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--r); padding: 16px;
+      margin-bottom: 20px;
+    }
+    .pkt-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 16px; font-size: 12px;
+    }
+    .pkt-title { color: var(--text); font-weight: 500; }
+    .pkt-live {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+      color: var(--accent);
+    }
+    .pkt-live-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent); animation: blink 1s ease infinite;
+    }
+    .sparkline {
+      display: flex; align-items: flex-end; gap: 3px; height: 60px;
+    }
+    .bar {
+      flex: 1; border-radius: 3px 3px 0 0;
+      background: linear-gradient(180deg, var(--accent), rgba(0,229,200,.2));
+      transition: height .5s ease;
+    }
+
+    /* device table */
+    .device-table {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--r); overflow: hidden;
+    }
+    .table-header {
+      display: grid; grid-template-columns: 2fr 1.5fr 1fr 1fr;
+      padding: 10px 16px;
+      background: var(--bg2); border-bottom: 1px solid var(--border);
+      font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+      color: var(--muted);
+    }
+    .table-row {
+      display: grid; grid-template-columns: 2fr 1.5fr 1fr 1fr;
+      padding: 11px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px; align-items: center;
+      transition: background .15s;
+    }
+    .table-row:last-child { border-bottom: none; }
+    .table-row:hover { background: rgba(255,255,255,.02); }
+    .status-dot {
+      display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+      margin-right: 6px;
+    }
+    .online { background: #27c93f; box-shadow: 0 0 5px #27c93f; }
+    .offline { background: var(--muted); }
+    .suspicious { background: var(--warn); box-shadow: 0 0 5px var(--warn); animation: blink 1s ease infinite; }
+
+    /* ════════════════════════════════════════
+       BENTO FEATURE GRID
+    ════════════════════════════════════════ */
+    .bento {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      grid-auto-rows: minmax(180px, auto);
+      gap: 12px;
+    }
+
+    .bcard {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 28px;
+      transition: border-color .3s, transform .3s cubic-bezier(.16,1,.3,1);
+      overflow: hidden; position: relative;
+    }
+    .bcard:hover {
+      border-color: rgba(0,229,200,.2);
+      transform: translateY(-2px);
+    }
+
+    .bcard.c4  { grid-column: span 4; }
+    .bcard.c6  { grid-column: span 6; }
+    .bcard.c8  { grid-column: span 8; }
+    .bcard.c12 { grid-column: span 12; }
+    .bcard.r2  { grid-row: span 2; }
+
+    .bcard-icon {
+      width: 38px; height: 38px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; margin-bottom: 20px;
+      background: rgba(0,229,200,.07); border: 1px solid rgba(0,229,200,.12);
+    }
+    .bcard-title {
+      font-family: var(--font-disp); font-size: 16px; font-weight: 700;
+      letter-spacing: -.02em; margin-bottom: 10px;
+    }
+    .bcard-desc {
+      font-size: 12px; color: var(--muted); line-height: 1.7;
+    }
+
+    /* ── visual accents inside cards ── */
+    .bcard-bg-glow {
+      position: absolute; width: 200px; height: 200px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(0,229,200,.07), transparent 70%);
+      pointer-events: none;
+    }
+
+    /* mini terminal */
+    .mini-terminal {
+      background: #08100e; border: 1px solid rgba(0,229,200,.15);
+      border-radius: 8px; padding: 14px 16px; margin-top: 16px;
+      font-size: 11px; line-height: 1.9; overflow: hidden;
+    }
+    .t-line { display: block; }
+    .t-prompt { color: var(--accent); }
+    .t-cmd { color: var(--text); }
+    .t-out { color: var(--muted); }
+    .t-ok { color: #27c93f; }
+    .cursor-blink {
+      display: inline-block; width: 7px; height: 13px;
+      background: var(--accent); vertical-align: middle;
+      animation: blink .9s step-start infinite;
+    }
+
+    /* scan animation */
+    .scan-anim {
+      width: 100%; height: 80px; position: relative; margin-top: 20px;
+      border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+      background: linear-gradient(90deg, var(--bg), var(--surface2));
+    }
+    .scan-beam {
+      position: absolute; top: 0; bottom: 0; width: 2px;
+      background: linear-gradient(180deg, transparent, var(--accent), transparent);
+      box-shadow: 0 0 12px var(--accent);
+      animation: scanMove 2.5s ease-in-out infinite;
+    }
+    @keyframes scanMove {
+      0%,100% { left: 0%; } 50% { left: calc(100% - 2px); }
+    }
+    .scan-dots {
+      position: absolute; inset: 0; display: flex;
+      align-items: center; gap: 16px; padding: 0 16px;
+    }
+    .scan-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: rgba(0,229,200,.3);
+      animation: appear 2.5s ease infinite;
+    }
+    .scan-dot:nth-child(2) { animation-delay: .3s; }
+    .scan-dot:nth-child(3) { animation-delay: .6s; background: rgba(255,170,0,.4); }
+    .scan-dot:nth-child(4) { animation-delay: .9s; }
+    .scan-dot:nth-child(5) { animation-delay: 1.2s; background: rgba(255,81,81,.4); }
+    .scan-dot:nth-child(6) { animation-delay: 1.5s; }
+    @keyframes appear {
+      0%,100% { opacity: .2; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.5); }
+    }
+
+    /* signal bars */
+    .signal-bars {
+      display: flex; align-items: flex-end; gap: 4px; height: 40px;
+      margin-top: 16px;
+    }
+    .sig-bar {
+      flex: 1; border-radius: 2px;
+      background: linear-gradient(180deg, var(--accent), rgba(0,229,200,.15));
+      animation: sigPulse 2s ease infinite;
+    }
+    .sig-bar:nth-child(1) { height: 30%; animation-delay: 0s; }
+    .sig-bar:nth-child(2) { height: 50%; animation-delay: .1s; }
+    .sig-bar:nth-child(3) { height: 80%; animation-delay: .2s; }
+    .sig-bar:nth-child(4) { height: 60%; animation-delay: .3s; }
+    .sig-bar:nth-child(5) { height: 100%; animation-delay: .4s; }
+    .sig-bar:nth-child(6) { height: 70%; animation-delay: .5s; }
+    .sig-bar:nth-child(7) { height: 45%; animation-delay: .6s; }
+    .sig-bar:nth-child(8) { height: 90%; animation-delay: .7s; }
+    @keyframes sigPulse {
+      0%,100% { opacity: 1; } 50% { opacity: .4; }
+    }
+
+    /* alert ticker */
+    .alert-ticker {
+      background: rgba(255,81,81,.05); border: 1px solid rgba(255,81,81,.15);
+      border-radius: 8px; padding: 12px 16px; margin-top: 16px;
+      font-size: 11px;
+    }
+    .alert-item {
+      display: flex; align-items: center; gap: 8px;
+      color: var(--muted); padding: 3px 0;
+    }
+    .alert-item .flag { color: var(--danger); font-size: 10px; letter-spacing: .06em; }
+
+    /* ════════════════════════════════════════
+       SPEC TABLE
+    ════════════════════════════════════════ */
+    .spec-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .spec-block {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--r); padding: 24px;
+    }
+    .spec-block-title {
+      font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+      color: var(--accent); margin-bottom: 16px;
+    }
+    .spec-row {
+      display: flex; justify-content: space-between;
+      padding: 9px 0; border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .spec-row:last-child { border-bottom: none; }
+    .spec-key { color: var(--muted); }
+    .spec-val { color: var(--text); font-weight: 500; }
+    .spec-val.hl { color: var(--accent); }
+
+    /* ════════════════════════════════════════
+       SETUP STEPS
+    ════════════════════════════════════════ */
+    .steps {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+    }
+    .step {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--r); padding: 24px; position: relative;
+    }
+    .step-num {
+      font-family: var(--font-disp); font-size: 40px; font-weight: 800;
+      color: rgba(0,229,200,.08); letter-spacing: -.03em;
+      margin-bottom: 16px; line-height: 1;
+    }
+    .step-title {
+      font-family: var(--font-disp); font-size: 14px; font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .step-desc { font-size: 12px; color: var(--muted); line-height: 1.7; }
+    .step-connector {
+      position: absolute; right: -7px; top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted); font-size: 12px; z-index: 2;
+    }
+    .step:last-child .step-connector { display: none; }
+
+    /* ════════════════════════════════════════
+       FOOTER
+    ════════════════════════════════════════ */
+    footer {
+      position: relative; z-index: 1;
+      border-top: 1px solid var(--border);
+      padding: 40px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .footer-left {
+      font-family: var(--font-disp); font-size: 14px; font-weight: 700;
+      color: var(--text);
+    }
+    .footer-left span { color: var(--accent); }
+    .footer-right { font-size: 11px; color: var(--muted); letter-spacing: .06em; }
+    .footer-links { display: flex; gap: 24px; }
+    .footer-links a { color: var(--muted); text-decoration: none; font-size: 11px; letter-spacing: .06em; }
+    .footer-links a:hover { color: var(--accent); }
+
+    /* ════════════════════════════════════════
+       UTILITIES
+    ════════════════════════════════════════ */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .fade-up {
+      opacity: 0; transform: translateY(24px);
+      transition: opacity .7s ease, transform .7s ease;
+    }
+    .fade-up.visible { opacity: 1; transform: translateY(0); }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 900px) {
+      nav { padding: 14px 20px; }
+      .nav-links { display: none; }
+      section { padding: 60px 20px; }
+      .bento { grid-template-columns: 1fr 1fr; }
+      .bcard.c4, .bcard.c6, .bcard.c8, .bcard.c12 { grid-column: span 2; }
+      .steps { grid-template-columns: 1fr 1fr; }
+      .spec-grid { grid-template-columns: 1fr; }
+      .dash-body { grid-template-columns: 1fr; }
+      .dash-sidebar { display: none; }
+      .dash-grid-top { grid-template-columns: 1fr 1fr; }
+      .table-header,
+      .table-row { grid-template-columns: 2fr 1fr 1fr; }
+      .table-header :nth-child(2),
+      .table-row :nth-child(2) { display: none; }
+      footer { flex-direction: column; gap: 16px; text-align: center; }
+    }
+    @media (max-width: 560px) {
+      .hero h1 { font-size: 32px; }
+      .bento { grid-template-columns: 1fr; }
+      .bcard.c4, .bcard.c6, .bcard.c8, .bcard.c12 { grid-column: span 1; }
+      .steps { grid-template-columns: 1fr; }
+      .dash-grid-top { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .01ms !important;
+        transition-duration: .01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ─────────── ANIMATED GRAPH BACKGROUND ─────────── -->
+<canvas id="graph-canvas"></canvas>
+
+<!-- ─────────── NAV ─────────── -->
+<nav>
+  <a class="nav-logo" href="#">
+    <span class="nav-logo-dot"></span>
+    CyberDash<span style="color:var(--accent);">.</span>ESP32
+  </a>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#dashboard">Dashboard</a></li>
+    <li><a href="#specs">Specs</a></li>
+    <li><a href="#setup">Setup</a></li>
+  </ul>
+  <div style="display:flex;align-items:center;gap:10px;">
+    <span id="gh-stars" style="display:none;align-items:center;gap:5px;font-size:11px;color:var(--muted);">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--warn)"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+      <span id="gh-stars-count">—</span>
+    </span>
+    <a href="https://github.com/ajvizganapathy-pixel/CyberDash-ESP32"
+       target="_blank" rel="noopener" class="nav-badge" style="text-decoration:none;">
+      ⬡ Open Source
+    </a>
+  </div>
+</nav>
+
+<!-- ─────────── HERO ─────────── -->
+<div class="hero">
+  <div class="hero-tag">
+    <span class="hero-tag-dot"></span>
+    On-device · Air-gapped · Real-time
+  </div>
+
+  <h1>
+    Network<br/>
+    <em>Intelligence</em><br/>
+    for <span class="grad">ESP32</span>
+  </h1>
+
+  <p class="hero-sub">
+    A self-contained cyber dashboard that runs entirely on your ESP32.<br/>
+    No cloud. No telemetry. Full visibility into your local network — served straight from the chip.
+  </p>
+
+  <div class="hero-actions">
+    <a href="flasher.html" class="btn-primary" style="text-decoration:none;display:inline-flex;align-items:center;gap:8px;">
+      ⚡ Flash Firmware →
+    </a>
+    <a href="https://github.com/ajvizganapathy-pixel/CyberDash-ESP32" target="_blank" rel="noopener"
+       class="btn-ghost" style="text-decoration:none;display:inline-flex;align-items:center;gap:8px;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0 1 12 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/>
+      </svg>
+      View Source
+    </a>
+  </div>
+
+  <div class="hero-metrics">
+    <div class="metric-item">
+      <div class="metric-val"><span class="accent">0</span> KB/s</div>
+      <div class="metric-label" id="rx-label">RX · Live</div>
+    </div>
+    <div class="metric-item">
+      <div class="metric-val" id="device-count">—</div>
+      <div class="metric-label">Devices Tracked</div>
+    </div>
+    <div class="metric-item">
+      <div class="metric-val" id="uptime">—</div>
+      <div class="metric-label">Uptime</div>
+    </div>
+    <div class="metric-item">
+      <div class="metric-val" id="cpu-val">—</div>
+      <div class="metric-label">CPU Temp</div>
+    </div>
+  </div>
+</div>
+
+<hr class="divider" />
+
+<!-- ─────────── DASHBOARD PREVIEW ─────────── -->
+<section id="dashboard">
+  <p class="section-label">Live Dashboard Preview</p>
+  <h2 class="section-title fade-up">Everything, in your browser.<br/>Served from the chip.</h2>
+  <p class="section-sub fade-up">The entire UI — HTML, CSS, JS — is embedded in flash. Connect to the ESP32's AP or your local WiFi and open <code style="color:var(--accent)">192.168.4.1</code></p>
+
+  <div class="dash-preview fade-up">
+    <!-- browser chrome -->
+    <div class="dash-topbar">
+      <div class="dot dot-r"></div>
+      <div class="dot dot-y"></div>
+      <div class="dot dot-g"></div>
+      <div class="dash-url">🔒 192.168.4.1 — CyberDash v2.1.0</div>
+    </div>
+
+    <div class="dash-body">
+      <!-- sidebar -->
+      <div class="dash-sidebar">
+        <div class="sidebar-section-title">Monitor</div>
+        <div class="dash-nav-item active"><span class="dash-nav-icon">◈</span> Overview</div>
+        <div class="dash-nav-item"><span class="dash-nav-icon">◉</span> Devices</div>
+        <div class="dash-nav-item"><span class="dash-nav-icon">◐</span> Packets</div>
+        <div class="dash-nav-item"><span class="dash-nav-icon">▦</span> Port Scan</div>
+
+        <div class="sidebar-section-title" style="margin-top:16px;">Network</div>
+        <div class="dash-nav-item"><span class="dash-nav-icon">⊕</span> WiFi Scan</div>
+        <div class="dash-nav-item"><span class="dash-nav-icon">⊗</span> ARP Table</div>
+        <div class="dash-nav-item"><span class="dash-nav-icon">⊘</span> DNS Log</div>
+
+        <div class="sidebar-section-title" style="margin-top:16px;">System</div>
+        <div class="dash-nav-item"><span class="dash-nav-icon">⊙</span> Settings</div>
+      </div>
+
+      <!-- main -->
+      <div class="dash-main">
+        <!-- stat cards -->
+        <div class="dash-grid-top">
+          <div class="stat-card">
+            <div class="stat-card-label">Devices Online</div>
+            <div class="stat-card-val cyan" id="d-devices">12</div>
+            <div class="stat-card-delta up">▲ +2 new in 5m</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">Pkts / sec</div>
+            <div class="stat-card-val green" id="d-pps">847</div>
+            <div class="stat-card-delta up">▲ High traffic</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">Alerts</div>
+            <div class="stat-card-val orange" id="d-alerts">3</div>
+            <div class="stat-card-delta dn">▼ ARP spoofing?</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">Heap Free</div>
+            <div class="stat-card-val" id="d-heap">187KB</div>
+            <div class="stat-card-delta" style="color:var(--muted)">── Stable</div>
+          </div>
+        </div>
+
+        <!-- sparkline -->
+        <div class="packet-graph">
+          <div class="pkt-header">
+            <span class="pkt-title">Packet Flow · Last 60s</span>
+            <span class="pkt-live"><span class="pkt-live-dot"></span>Live capture</span>
+          </div>
+          <div class="sparkline" id="sparkline">
+            <!-- bars generated by JS -->
+          </div>
+        </div>
+
+        <!-- device table -->
+        <div class="device-table">
+          <div class="table-header">
+            <span>IP / Hostname</span>
+            <span>MAC Address</span>
+            <span>RSSI</span>
+            <span>Status</span>
+          </div>
+          <div class="table-row">
+            <span>192.168.1.1 · Router</span>
+            <span style="color:var(--muted)">A8:4F:B5:21:C3:01</span>
+            <span style="color:var(--accent)">-42 dBm</span>
+            <span><span class="status-dot online"></span>Online</span>
+          </div>
+          <div class="table-row">
+            <span>192.168.1.14 · Laptop-A</span>
+            <span style="color:var(--muted)">3C:22:FB:A1:89:4D</span>
+            <span style="color:var(--accent)">-61 dBm</span>
+            <span><span class="status-dot online"></span>Online</span>
+          </div>
+          <div class="table-row">
+            <span>192.168.1.27 · Unknown</span>
+            <span style="color:var(--warn)">B4:XX:XX:XX:XX:XX</span>
+            <span style="color:var(--warn)">-78 dBm</span>
+            <span><span class="status-dot suspicious"></span>⚠ Probe</span>
+          </div>
+          <div class="table-row">
+            <span>192.168.1.33 · ESP-CAM</span>
+            <span style="color:var(--muted)">E8:DB:84:CF:12:A0</span>
+            <span style="color:var(--accent)">-55 dBm</span>
+            <span><span class="status-dot online"></span>Online</span>
+          </div>
+          <div class="table-row">
+            <span>192.168.1.99 · Offline</span>
+            <span style="color:var(--muted)">DC:A6:32:7F:88:B2</span>
+            <span style="color:var(--muted)">—</span>
+            <span><span class="status-dot offline"></span>Gone</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ─────────── FEATURES BENTO ─────────── -->
+<section id="features">
+  <p class="section-label">Capabilities</p>
+  <h2 class="section-title fade-up">Everything a network<br/>needs to be seen.</h2>
+  <p class="section-sub fade-up">CyberDash packs professional-grade network visibility into a $5 microcontroller. No Raspberry Pi. No laptop. Just the ESP32.</p>
+
+  <div class="bento">
+
+    <!-- Card 1: WiFi Scanner (wide) -->
+    <div class="bcard c8 r2 fade-up">
+      <div class="bcard-bg-glow" style="top:-60px;right:-60px;"></div>
+      <div class="bcard-icon">📡</div>
+      <div class="bcard-title">WiFi Network Scanner</div>
+      <div class="bcard-desc">Continuously scans all 2.4 GHz channels. Logs SSIDs, BSSIDs, channel, RSSI, encryption type, and beacon interval. Detects hidden networks and tracks signal history.</div>
+      <div class="scan-anim">
+        <div class="scan-beam"></div>
+        <div class="scan-dots">
+          <div class="scan-dot"></div><div class="scan-dot"></div>
+          <div class="scan-dot"></div><div class="scan-dot"></div>
+          <div class="scan-dot"></div><div class="scan-dot"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card 2: Alerts (narrow tall) -->
+    <div class="bcard c4 r2 fade-up">
+      <div class="bcard-icon">🛡</div>
+      <div class="bcard-title">Threat Alerts</div>
+      <div class="bcard-desc">Real-time heuristic detection of ARP spoofing, probe floods, rogue APs, and unexpected MAC changes.</div>
+      <div class="alert-ticker">
+        <div class="alert-item"><span class="flag">WARN</span> ARP reply mismatch · .27</div>
+        <div class="alert-item"><span class="flag">INFO</span> New device joined · .41</div>
+        <div class="alert-item"><span class="flag" style="color:var(--danger)">CRIT</span> Probe flood · chan 6</div>
+        <div class="alert-item"><span class="flag">WARN</span> RSSI drop · .14</div>
+      </div>
+    </div>
+
+    <!-- Card 3: Terminal -->
+    <div class="bcard c6 fade-up">
+      <div class="bcard-icon">⌨</div>
+      <div class="bcard-title">Serial Console</div>
+      <div class="bcard-desc">Full REPL accessible over USB or WebSerial. Query live state, tune thresholds, reload config.</div>
+      <div class="mini-terminal">
+        <span class="t-line"><span class="t-prompt">cyber&gt; </span><span class="t-cmd">scan --channels all</span></span>
+        <span class="t-line"><span class="t-out">Scanning 13 channels...</span></span>
+        <span class="t-line"><span class="t-ok">[OK]</span><span class="t-out"> Found 9 networks</span></span>
+        <span class="t-line"><span class="t-prompt">cyber&gt; </span><span class="cursor-blink"></span></span>
+      </div>
+    </div>
+
+    <!-- Card 4: RSSI -->
+    <div class="bcard c6 fade-up">
+      <div class="bcard-icon">📶</div>
+      <div class="bcard-title">RSSI Spectrum Monitor</div>
+      <div class="bcard-desc">Per-channel signal strength visualisation. Instantly spot interference, crowded channels, and weak clients.</div>
+      <div class="signal-bars">
+        <div class="sig-bar"></div><div class="sig-bar"></div>
+        <div class="sig-bar"></div><div class="sig-bar"></div>
+        <div class="sig-bar"></div><div class="sig-bar"></div>
+        <div class="sig-bar"></div><div class="sig-bar"></div>
+      </div>
+    </div>
+
+    <!-- Card 5: Packet sniffer -->
+    <div class="bcard c4 fade-up">
+      <div class="bcard-icon">🔬</div>
+      <div class="bcard-title">Packet Inspector</div>
+      <div class="bcard-desc">Promiscuous-mode capture. Filter by MAC, type, or channel. Raw frame hex dump with annotation.</div>
+    </div>
+
+    <!-- Card 6: Air-gapped -->
+    <div class="bcard c4 fade-up">
+      <div class="bcard-icon">🔒</div>
+      <div class="bcard-title">Fully Offline</div>
+      <div class="bcard-desc">Zero external requests. The entire frontend is baked into flash. Runs as a local AP — no internet required, ever.</div>
+    </div>
+
+    <!-- Card 7: OTA -->
+    <div class="bcard c4 fade-up">
+      <div class="bcard-icon">⬆</div>
+      <div class="bcard-title">OTA Updates</div>
+      <div class="bcard-desc">Push new firmware from the dashboard itself. Diff-based incremental update with rollback protection.</div>
+    </div>
+
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ─────────── SPECS ─────────── -->
+<section id="specs">
+  <p class="section-label">Technical Specs</p>
+  <h2 class="section-title fade-up">Built on ESP32.<br/>Optimised for the edge.</h2>
+  <p class="section-sub fade-up">Tested on ESP32, ESP32-S3, and ESP32-C3. Firmware built with Arduino + IDF components. PCB schematics in KiCad.</p>
+
+  <div class="spec-grid fade-up">
+    <div class="spec-block">
+      <div class="spec-block-title">Firmware</div>
+      <div class="spec-row"><span class="spec-key">Framework</span><span class="spec-val hl">Arduino + ESP-IDF</span></div>
+      <div class="spec-row"><span class="spec-key">Flash Usage</span><span class="spec-val">~1.1 MB</span></div>
+      <div class="spec-row"><span class="spec-key">SPIFFS / LittleFS</span><span class="spec-val hl">LittleFS · 256 KB</span></div>
+      <div class="spec-row"><span class="spec-key">WebServer</span><span class="spec-val">AsyncWebServer</span></div>
+      <div class="spec-row"><span class="spec-key">WebSocket</span><span class="spec-val hl">AsyncWebSocket · 10 ms</span></div>
+      <div class="spec-row"><span class="spec-key">NVS Config</span><span class="spec-val">Preferences API</span></div>
+    </div>
+
+    <div class="spec-block">
+      <div class="spec-block-title">Hardware</div>
+      <div class="spec-row"><span class="spec-key">Target MCU</span><span class="spec-val hl">ESP32 / S3 / C3</span></div>
+      <div class="spec-row"><span class="spec-key">Flash Min.</span><span class="spec-val">4 MB</span></div>
+      <div class="spec-row"><span class="spec-key">PSRAM</span><span class="spec-val">Optional · improves perf</span></div>
+      <div class="spec-row"><span class="spec-key">WiFi Mode</span><span class="spec-val hl">STA + AP Dual</span></div>
+      <div class="spec-row"><span class="spec-key">Monitor Mode</span><span class="spec-val hl">Promiscuous · all ch.</span></div>
+      <div class="spec-row"><span class="spec-key">UART Baud</span><span class="spec-val">115200 / 921600</span></div>
+    </div>
+
+    <div class="spec-block">
+      <div class="spec-block-title">Dashboard</div>
+      <div class="spec-row"><span class="spec-key">UI Stack</span><span class="spec-val hl">Vanilla HTML/CSS/JS</span></div>
+      <div class="spec-row"><span class="spec-key">Render</span><span class="spec-val">Single-page, no framework</span></div>
+      <div class="spec-row"><span class="spec-key">Compression</span><span class="spec-val hl">gzip brotli (serve)</span></div>
+      <div class="spec-row"><span class="spec-key">Theme</span><span class="spec-val">Dark · CSS vars</span></div>
+      <div class="spec-row"><span class="spec-key">Refresh Rate</span><span class="spec-val hl">WebSocket push · ~100ms</span></div>
+      <div class="spec-row"><span class="spec-key">Mobile</span><span class="spec-val">Responsive / PWA-ready</span></div>
+    </div>
+
+    <div class="spec-block">
+      <div class="spec-block-title">PCB / Schematic</div>
+      <div class="spec-row"><span class="spec-key">EDA Tool</span><span class="spec-val hl">KiCad 8</span></div>
+      <div class="spec-row"><span class="spec-key">Form Factor</span><span class="spec-val">60 × 40 mm · 2-layer</span></div>
+      <div class="spec-row"><span class="spec-key">Power Input</span><span class="spec-val hl">5V via USB-C</span></div>
+      <div class="spec-row"><span class="spec-key">Connector</span><span class="spec-val">2-pin screw terminal (bat)</span></div>
+      <div class="spec-row"><span class="spec-key">Passives</span><span class="spec-val hl">1206 hand-solderable</span></div>
+      <div class="spec-row"><span class="spec-key">Gerbers</span><span class="spec-val">Included in repo</span></div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ─────────── SETUP ─────────── -->
+<section id="setup">
+  <p class="section-label">Getting Started</p>
+  <h2 class="section-title fade-up">Up and running<br/>in 4 steps.</h2>
+  <p class="section-sub fade-up">No SDKs to install beyond the Arduino IDE and the ESP32 board package. Clone, compile, flash.</p>
+
+  <div class="steps fade-up">
+    <div class="step">
+      <div class="step-num">01</div>
+      <div class="step-title">Clone the repo</div>
+      <div class="step-desc">
+        <code style="color:var(--accent);font-size:11px;display:block;margin-bottom:8px;">git clone https://github.com/<br/>ajvizganapathy-pixel/<br/>CyberDash-ESP32</code>
+        Open in Arduino IDE or PlatformIO.
+      </div>
+      <span class="step-connector">→</span>
+    </div>
+    <div class="step">
+      <div class="step-num">02</div>
+      <div class="step-title">Install dependencies</div>
+      <div class="step-desc">Install <strong>ESPAsyncWebServer</strong>, <strong>AsyncTCP</strong>, and the <strong>LittleFS</strong> plugin from the Arduino Library Manager. Board: ESP32 by Espressif.</div>
+      <span class="step-connector">→</span>
+    </div>
+    <div class="step">
+      <div class="step-num">03</div>
+      <div class="step-title">Upload SPIFFS data</div>
+      <div class="step-desc">Run the LittleFS upload tool to flash the <code style="color:var(--accent)">data/</code> folder containing the web interface to the chip's filesystem.</div>
+      <span class="step-connector">→</span>
+    </div>
+    <div class="step">
+      <div class="step-num">04</div>
+      <div class="step-title">Connect & explore</div>
+      <div class="step-desc">Join the <code style="color:var(--accent)">CyberDash-AP</code> WiFi and open <code style="color:var(--accent)">192.168.4.1</code> in any browser. The full dashboard loads instantly.</div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ─────────── FOOTER ─────────── -->
+<footer>
+  <div class="footer-left">
+    CyberDash<span>.</span>ESP32
+    <div style="font-size:11px;font-weight:400;color:var(--muted);margin-top:4px;font-family:var(--font-mono)">v2.1.0 · MIT License</div>
+  </div>
+  <div class="footer-links">
+    <a href="https://github.com/ajvizganapathy-pixel/CyberDash-ESP32"
+       target="_blank" rel="noopener">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:middle;margin-right:4px;"><path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0 1 12 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/></svg>
+      GitHub
+    </a>
+    <a href="https://github.com/ajvizganapathy-pixel/CyberDash-ESP32#readme"
+       target="_blank" rel="noopener">Docs</a>
+    <a href="https://github.com/ajvizganapathy-pixel/CyberDash-ESP32/releases"
+       target="_blank" rel="noopener">Releases</a>
+    <a href="https://github.com/ajvizganapathy-pixel/CyberDash-ESP32/tree/main/hardware"
+       target="_blank" rel="noopener">KiCad Files</a>
+    <a href="flasher.html" style="color:var(--accent);">⚡ Flash Tool</a>
+  </div>
+  <div class="footer-right">No cloud. No telemetry. Ever.</div>
+</footer>
+
+<!-- ═══════════════════════════════════
+     SCRIPTS
+═══════════════════════════════════ -->
+<script>
+// ─── 1. Graph canvas background ─────────────────────────────
+(function() {
+  const canvas = document.getElementById('graph-canvas');
+  const ctx = canvas.getContext('2d');
+  let W, H, nodes;
+  const NODE_COUNT = 60;
+  const MAX_DIST   = 140;
+
+  function resize() {
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+
+  function mkNodes() {
+    nodes = Array.from({ length: NODE_COUNT }, () => ({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      vx: (Math.random() - .5) * .4,
+      vy: (Math.random() - .5) * .4,
+      r:  Math.random() * 1.5 + .5,
+    }));
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    // update positions
+    for (const n of nodes) {
+      n.x += n.vx; n.y += n.vy;
+      if (n.x < 0 || n.x > W) n.vx *= -1;
+      if (n.y < 0 || n.y > H) n.vy *= -1;
+    }
+
+    // draw edges
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const dx = nodes[i].x - nodes[j].x;
+        const dy = nodes[i].y - nodes[j].y;
+        const d  = Math.sqrt(dx * dx + dy * dy);
+        if (d < MAX_DIST) {
+          const alpha = (1 - d / MAX_DIST) * .18;
+          ctx.strokeStyle = `rgba(0,229,200,${alpha})`;
+          ctx.lineWidth = .6;
+          ctx.beginPath();
+          ctx.moveTo(nodes[i].x, nodes[i].y);
+          ctx.lineTo(nodes[j].x, nodes[j].y);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // draw nodes
+    for (const n of nodes) {
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,229,200,.55)';
+      ctx.fill();
+    }
+
+    requestAnimationFrame(draw);
+  }
+
+  resize(); mkNodes(); draw();
+  window.addEventListener('resize', () => { resize(); mkNodes(); });
+})();
+
+// ─── 2. Sparkline bars ──────────────────────────────────────
+(function() {
+  const sl = document.getElementById('sparkline');
+  const COUNT = 28;
+  const heights = Array.from({ length: COUNT }, () => Math.random() * 100);
+  sl.innerHTML = heights.map(h =>
+    `<div class="bar" style="height:${h}%"></div>`
+  ).join('');
+
+  setInterval(() => {
+    heights.shift();
+    heights.push(Math.random() * 100);
+    const bars = sl.querySelectorAll('.bar');
+    bars.forEach((b, i) => { b.style.height = heights[i] + '%'; });
+  }, 600);
+})();
+
+// ─── 3. Live hero metrics ────────────────────────────────────
+(function() {
+  let uptimeSec = 0;
+  const rxEl   = document.querySelector('.metric-val .accent');
+  const devEl  = document.getElementById('device-count');
+  const upEl   = document.getElementById('uptime');
+  const cpuEl  = document.getElementById('cpu-val');
+
+  // Also update dash cards
+  const dDev  = document.getElementById('d-devices');
+  const dPps  = document.getElementById('d-pps');
+  const dAlert= document.getElementById('d-alerts');
+  const dHeap = document.getElementById('d-heap');
+
+  function fmt(sec) {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    return `${h}h ${m}m ${String(s).padStart(2,'0')}s`;
+  }
+
+  setInterval(() => {
+    uptimeSec++;
+    upEl.textContent = fmt(uptimeSec);
+
+    const rx = (Math.random() * 200 + 20).toFixed(1);
+    if (rxEl) rxEl.textContent = rx;
+
+    devEl.textContent = String(Math.floor(Math.random() * 4 + 10));
+    cpuEl.textContent = (Math.random() * 10 + 48).toFixed(1) + '°C';
+
+    // dash
+    if (dDev) dDev.textContent = String(Math.floor(Math.random() * 3 + 11));
+    if (dPps) dPps.textContent = String(Math.floor(Math.random() * 400 + 600));
+    if (dHeap) dHeap.textContent = Math.floor(Math.random() * 30 + 170) + 'KB';
+  }, 1000);
+})();
+
+// ─── 4. Scroll reveal ───────────────────────────────────────
+(function() {
+  const els = document.querySelectorAll('.fade-up');
+  const io  = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.classList.add('visible');
+        io.unobserve(e.target);
+      }
+    });
+  }, { threshold: .08 });
+  els.forEach(el => io.observe(el));
+})();
+
+// ─── 5. GitHub API — stars + latest release ─────────────────
+(function() {
+  const REPO = 'ajvizganapathy-pixel/CyberDash-ESP32';
+
+  // Fetch repo stats
+  fetch(`https://api.github.com/repos/${REPO}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.stargazers_count !== undefined) {
+        const el = document.getElementById('gh-stars');
+        const cnt = document.getElementById('gh-stars-count');
+        if (el && cnt) {
+          cnt.textContent = d.stargazers_count;
+          el.style.display = 'flex';
+        }
+      }
+    })
+    .catch(() => {}); // silently fail if API unavailable
+
+  // Fetch latest release — update release links if present
+  fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.tag_name) {
+        // update footer version tag dynamically
+        const vTag = document.querySelector('.footer-left div');
+        if (vTag) vTag.textContent = `${d.tag_name} · MIT License`;
+      }
+    })
+    .catch(() => {});
+})();
+</script>
+
+</body>
+</html>
