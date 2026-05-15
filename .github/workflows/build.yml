@@ -47,7 +47,10 @@ jobs:
 
       - name: Build firmware
         env:
-          PLATFORMIO_BUILD_FLAGS: -DCYBERDASH_CI=1
+          PLATFORMIO_BUILD_FLAGS: >-
+            -DCYBERDASH_CI=1
+            -DCYBERDASH_BUILD_TAG=\"${{ github.ref_name }}\"
+            -DCYBERDASH_BUILD_SHA=\"${{ github.sha }}\"
         run: pio run -e esp32dev
 
       - name: Upload build artifacts
