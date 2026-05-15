@@ -9,11 +9,20 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
 
-  <!-- esptool.js — official Espressif JS port for WebSerial flashing -->
+  <!-- esptool-js — official Espressif WebSerial flasher.
+       Loaded as an ES module and bridged onto window so the (non-module)
+       main script below can use the classes. -->
   <script type="module">
-    // We import esptool.js from the ESPHome CDN (esphome.github.io/esp-web-tools)
-    // This provides the ESPLoader class used by the connect flow below.
-    // The actual flashing logic is gated behind the user clicking Connect.
+    try {
+      const mod = await import("https://cdn.jsdelivr.net/npm/esptool-js@0.5.4/+esm");
+      window.ESPLoader = mod.ESPLoader;
+      window.Transport = mod.Transport;
+      window.__esptoolReady = true;
+      window.dispatchEvent(new CustomEvent('esptool-ready'));
+    } catch (e) {
+      window.__esptoolError = e;
+      window.dispatchEvent(new CustomEvent('esptool-error', { detail: e }));
+    }
   </script>
 
   <style>
@@ -688,13 +697,25 @@ const REPO_URL   = `https://github.com/${REPO}`;
 const API_BASE   = `https://api.github.com/repos/${REPO}`;
 
 // ── state ──
-let port          = null;
-let reader        = null;
-let writer        = null;
-let connected     = false;
-let selectedFW    = null;   // { name, url, size }
-let localBinFile  = null;
-let termMode      = 'flash';
+let port             = null;
+let transport        = null;     // esptool-js Transport wrapping the SerialPort
+let esploader        = null;     // esptool-js ESPLoader
+let connected        = false;
+let selectedRelease  = null;     // { tag, prerelease, firmware, bootloader, partitions, manifest, totalSize }
+let localBinFile     = null;
+let termMode         = 'flash';
+let serialReadAbort  = null;     // AbortController for the serial monitor reader
+
+// esptool-js readiness (loaded by the top-of-body ES module)
+let esptoolReady = !!window.__esptoolReady;
+window.addEventListener('esptool-ready', () => {
+  esptoolReady = true;
+  log('ok', 'esptool-js loaded — ready to flash.');
+});
+window.addEventListener('esptool-error', (e) => {
+  log('err', 'Failed to load esptool-js from CDN: ' + (e.detail?.message || e.detail));
+  log('muted', 'Check your network / CSP / browser console.');
+});
 
 // ══════════════════════════════════════════════
 //  INIT
@@ -705,12 +726,20 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('browser-warn').classList.add('show');
   }
 
-  log('info', 'CyberDash ESP32 Web Flasher · v2.1.0');
+  log('info', 'CyberDash ESP32 Web Flasher');
   log('muted', '─────────────────────────────────────────');
-  log('muted', 'Requires Chrome 89+ or Edge 89+ with Web Serial API');
+  log('muted', 'Requires Chrome 89+ or Edge 89+ with Web Serial API.');
+  log('muted', 'Powered by esptool-js (real ROM bootloader sync + writeFlash).');
   log('muted', 'Connect your ESP32 via USB, then click Connect.');
   log('muted', '─────────────────────────────────────────');
   log('accent', 'Repo: ' + REPO_URL);
+  if (window.__esptoolReady) {
+    log('ok', 'esptool-js ready.');
+  } else if (window.__esptoolError) {
+    log('err', 'esptool-js failed to load: ' + (window.__esptoolError.message || window.__esptoolError));
+  } else {
+    log('muted', 'Loading esptool-js from CDN…');
+  }
 
   // drag & drop
   const drop = document.getElementById('file-drop');
@@ -779,53 +808,109 @@ function switchTermTab(t) {
 function toggleOpt(el) { el.classList.toggle('on'); }
 
 // ══════════════════════════════════════════════
-//  CONNECT / DISCONNECT  (Web Serial API)
+//  CONNECT / DISCONNECT  (real esptool-js ROM sync)
 // ══════════════════════════════════════════════
 async function handleConnect() {
-  if (connected) {
-    await disconnectDevice();
-    return;
-  }
+  if (connected) { await disconnectDevice(); return; }
 
   if (!('serial' in navigator)) {
     log('err', 'Web Serial API not available. Use Chrome or Edge 89+.');
     return;
   }
+  if (!esptoolReady) {
+    log('warn', 'esptool-js still loading — try again in a moment.');
+    return;
+  }
 
   try {
     log('info', 'Opening browser serial port picker…');
-    port = await navigator.serial.requestPort({ filters: [] });
+    port = await navigator.serial.requestPort({});
     const baud = parseInt(document.getElementById('baud-select').value, 10);
-    await port.open({ baudRate: baud, dataBits: 8, stopBits: 1, parity: 'none', bufferSize: 8192 });
 
+    // Stop any serial monitor that was running
+    if (serialReadAbort) { serialReadAbort.abort(); serialReadAbort = null; }
+
+    transport = new window.Transport(port, true);
+    esploader = new window.ESPLoader({
+      transport,
+      baudrate: baud,
+      romBaudrate: 115200,
+      terminal: {
+        clean: () => {},
+        writeLine: (s) => log('muted', s),
+        write: () => {},   // suppress per-byte spam
+      },
+      debugLogging: false,
+    });
+
+    log('info', `Syncing with ROM bootloader (target baud ${baud})…`);
+    const chipName = await esploader.main();
     connected = true;
-    log('ok', `Port opened at ${baud} baud`);
-    log('info', 'Connecting to ESP32 stub loader…');
+    log('ok', `Chip detected: ${chipName}`);
+
+    // Pull live chip metadata
+    let macStr = '—', flashIdHex = '—', features = '—', revStr = '—', xtalStr = '40 MHz';
+    try { macStr = await esploader.chip.readMac(esploader); } catch (e) { /* non-fatal */ }
+    try {
+      const id = await esploader.readFlashId();
+      flashIdHex = '0x' + id.toString(16).toUpperCase().padStart(6, '0');
+    } catch (e) { /* non-fatal */ }
+    try {
+      if (Array.isArray(esploader.chip.FEATURES)) features = esploader.chip.FEATURES.join(' / ');
+    } catch (e) {}
+    try {
+      const rMaj = esploader.chip.CHIP_REVISION_MAJOR ?? esploader.chip.CHIP_REVISION ?? null;
+      const rMin = esploader.chip.CHIP_REVISION_MINOR ?? null;
+      if (rMaj !== null) revStr = (rMin !== null) ? `v${rMaj}.${rMin}` : `v${rMaj}`;
+    } catch (e) {}
+    try {
+      if (esploader.chip.XTAL_FREQ_HZ) xtalStr = `${Math.round(esploader.chip.XTAL_FREQ_HZ/1e6)} MHz`;
+    } catch (e) {}
+
+    log('accent', `MAC ${macStr}   Flash ID ${flashIdHex}`);
+    if (features !== '—') log('ok', `Features: ${features}`);
+
+    document.getElementById('ci-chip').textContent  = chipName;
+    document.getElementById('ci-rev').textContent   = revStr;
+    document.getElementById('ci-flash').textContent = flashIdHex;
+    document.getElementById('ci-mac').textContent   = macStr;
+    document.getElementById('ci-feat').textContent  = features;
+    document.getElementById('ci-xtal').textContent  = xtalStr;
+    document.getElementById('chip-card').classList.add('show');
 
     updateConnectUI(true);
-    await detectChip();
+    setStatus('ready', 'Device ready — select firmware');
+    document.getElementById('erase-btn').disabled = false;
+    checkFlashReady();
 
   } catch (err) {
     if (err.name === 'NotFoundError') {
       log('warn', 'No port selected — cancelled.');
     } else {
-      log('err', 'Connection failed: ' + err.message);
+      log('err', 'Connection failed: ' + (err.message || err));
+      log('muted', 'Tip: hold BOOT, tap RST, release BOOT — then retry Connect.');
     }
     connected = false;
+    try { if (transport) await transport.disconnect(); } catch (_) {}
+    transport = null;
+    esploader = null;
+    port = null;
   }
 }
 
 async function disconnectDevice() {
   try {
-    if (reader)  { await reader.cancel(); reader = null; }
-    if (writer)  { writer.releaseLock(); writer = null; }
-    if (port)    { await port.close();   port = null; }
-  } catch(_) {}
+    if (serialReadAbort) { serialReadAbort.abort(); serialReadAbort = null; }
+    if (transport) { await transport.disconnect(); }
+  } catch (_) {}
+  transport = null;
+  esploader = null;
+  port = null;
   connected = false;
   updateConnectUI(false);
   setStatus('idle', 'Waiting for connection');
-  document.getElementById('flash-btn').disabled  = true;
-  document.getElementById('erase-btn').disabled  = true;
+  document.getElementById('flash-btn').disabled = true;
+  document.getElementById('erase-btn').disabled = true;
   document.getElementById('chip-card').classList.remove('show');
   document.getElementById('serial-send-btn').disabled = true;
   log('warn', 'Device disconnected.');
@@ -846,43 +931,6 @@ function updateConnectUI(isConnected) {
   }
 }
 
-// ── Simulated chip detection (real logic requires esptool.js stub) ──
-async function detectChip() {
-  log('info', 'Sending stub loader command…');
-  await sleep(400);
-  log('info', 'Resetting into bootloader mode (RTS/DTR)…');
-  await sleep(600);
-
-  // In production this would read actual chip response from the serial stub.
-  // We display the detected chip info once the stub responds.
-  const chips = [
-    { chip:'ESP32-S3', rev:'v0.2', flash:'4MB', mac: randomMac(), feat:'WiFi / BLE 5 / PSRAM', xtal:'40MHz' },
-    { chip:'ESP32',    rev:'v1.0', flash:'4MB', mac: randomMac(), feat:'WiFi / BLE 4.2',        xtal:'40MHz' },
-    { chip:'ESP32-C3', rev:'v0.3', flash:'4MB', mac: randomMac(), feat:'WiFi / BLE 5 / RISC-V', xtal:'40MHz' },
-  ];
-  const c = chips[0]; // default to S3 for CyberDash target
-
-  log('ok', `Chip detected: ${c.chip} (Revision ${c.rev})`);
-  log('accent', `Flash: ${c.flash}  MAC: ${c.mac}`);
-  log('ok', `Features: ${c.feat}`);
-
-  document.getElementById('ci-chip').textContent  = c.chip;
-  document.getElementById('ci-rev').textContent   = c.rev;
-  document.getElementById('ci-flash').textContent = c.flash;
-  document.getElementById('ci-mac').textContent   = c.mac;
-  document.getElementById('ci-feat').textContent  = c.feat;
-  document.getElementById('ci-xtal').textContent  = c.xtal;
-  document.getElementById('chip-card').classList.add('show');
-
-  setStatus('ready', 'Device ready — select firmware');
-  document.getElementById('erase-btn').disabled = false;
-  checkFlashReady();
-}
-
-function randomMac() {
-  return Array.from({length:6}, () => Math.floor(Math.random()*256).toString(16).padStart(2,'0').toUpperCase()).join(':');
-}
-
 // ══════════════════════════════════════════════
 //  GITHUB RELEASES
 // ══════════════════════════════════════════════
@@ -900,44 +948,56 @@ async function fetchReleases() {
       list.innerHTML = `
         <div style="font-size:11px;color:var(--muted);padding:14px 8px;text-align:center;line-height:1.7;">
           <div style="color:var(--accent);font-weight:600;margin-bottom:4px;">No releases published yet</div>
-          The first official firmware build hasn't shipped.<br/>
-          Switch to <strong style="color:var(--accent);">Local .bin</strong> above to flash your own build, or
-          <a href="${REPO_URL}/releases" target="_blank" style="color:var(--accent);">watch the repo</a> for v0.1.0.
+          Switch to <strong style="color:var(--accent);">Local .bin</strong> above to flash your own build.
         </div>`;
-      log('warn', 'No releases found — use the Local .bin tab in the meantime.');
+      log('warn', 'No releases found.');
       return;
     }
 
     list.innerHTML = '';
     let count = 0;
 
-    for (const rel of releases.slice(0, 6)) {
-      for (const asset of rel.assets) {
-        if (!asset.name.endsWith('.bin')) continue;
-        const item = document.createElement('div');
-        item.className = 'release-item';
-        item.dataset.url  = asset.browser_download_url;
-        item.dataset.name = asset.name;
-        item.dataset.size = asset.size;
-        item.innerHTML = `
-          <span class="rel-tag">${rel.tag_name}</span>
-          <span class="rel-name">${asset.name}</span>
-          <span class="rel-size">${(asset.size/1024).toFixed(0)} KB</span>`;
-        item.onclick = () => selectRelease(item, asset, rel.tag_name);
-        list.appendChild(item);
-        count++;
-      }
+    for (const rel of releases.slice(0, 8)) {
+      // Pick canonical bins by exact filename. Tag-named copies are ignored
+      // here to keep the list one row per release.
+      const byName = Object.fromEntries(rel.assets.map(a => [a.name, a]));
+      const firmware   = byName['firmware.bin'];
+      const bootloader = byName['bootloader.bin'];
+      const partitions = byName['partitions.bin'];
+      const manifest   = byName['manifest.json'];
+      if (!firmware) continue;
+
+      const totalSize = (firmware?.size || 0) + (bootloader?.size || 0) + (partitions?.size || 0);
+      const partsLabel = [
+        bootloader && 'bootloader',
+        partitions && 'partitions',
+        firmware   && 'firmware',
+      ].filter(Boolean).join(' + ');
+
+      const item = document.createElement('div');
+      item.className = 'release-item';
+      item.innerHTML = `
+        <span class="rel-tag">${rel.tag_name}${rel.prerelease ? ' · pre' : ''}</span>
+        <span class="rel-name">${partsLabel}</span>
+        <span class="rel-size">${(totalSize/1024).toFixed(0)} KB</span>`;
+      item.onclick = () => selectRelease(item, {
+        tag: rel.tag_name,
+        prerelease: rel.prerelease,
+        firmware, bootloader, partitions, manifest,
+        totalSize,
+      });
+      list.appendChild(item);
+      count++;
     }
 
     if (!count) {
-      list.innerHTML = `<div style="font-size:11px;color:var(--muted);padding:12px 0;text-align:center;">No .bin assets found in releases.</div>`;
-      log('warn', 'Releases exist but no .bin assets attached yet.');
+      list.innerHTML = `<div style="font-size:11px;color:var(--muted);padding:12px 0;text-align:center;">No flashable releases (need firmware.bin asset).</div>`;
+      log('warn', 'Releases exist but lack the expected firmware.bin asset.');
     } else {
-      log('ok', `Found ${count} .bin asset(s) across ${releases.length} release(s).`);
+      log('ok', `Found ${count} flashable release(s).`);
     }
 
   } catch (err) {
-    // Repo may not have releases yet — graceful fallback
     list.innerHTML = `
       <div style="font-size:11px;color:var(--muted);padding:16px;text-align:center;line-height:1.8;">
         Couldn't load releases.<br/>
@@ -945,16 +1005,17 @@ async function fetchReleases() {
         <span style="font-size:10px;">Or use the Local .bin tab above.</span>
       </div>`;
     log('warn', 'GitHub releases unavailable: ' + err.message);
-    log('muted', 'Tip: Use the Local .bin tab to upload a firmware file directly.');
   }
 }
 
-function selectRelease(el, asset, tag) {
+function selectRelease(el, rel) {
   document.querySelectorAll('.release-item').forEach(i => i.classList.remove('selected'));
   el.classList.add('selected');
-  selectedFW = { name: asset.name, url: asset.browser_download_url, size: asset.size, tag };
+  selectedRelease = rel;
   localBinFile = null;
-  log('accent', `Selected: ${asset.name}  (${tag}, ${(asset.size/1024).toFixed(0)} KB)`);
+  const parts = [rel.bootloader && 'bootloader', rel.partitions && 'partitions', rel.firmware && 'firmware']
+    .filter(Boolean).join(' + ');
+  log('accent', `Selected ${rel.tag}: ${parts}  (${(rel.totalSize/1024).toFixed(0)} KB total)`);
   checkFlashReady();
 }
 
@@ -971,7 +1032,8 @@ function handleFileDrop(file) {
     return;
   }
   localBinFile = file;
-  selectedFW = null;
+  selectedRelease = null;
+  document.querySelectorAll('.release-item').forEach(i => i.classList.remove('selected'));
 
   const drop = document.getElementById('file-drop');
   drop.classList.add('file-selected');
@@ -993,7 +1055,7 @@ function handleFileDrop(file) {
 // ══════════════════════════════════════════════
 function checkFlashReady() {
   const hasDevice = connected;
-  const hasFW     = selectedFW || localBinFile;
+  const hasFW     = selectedRelease || localBinFile;
   const ready     = hasDevice && hasFW;
 
   document.getElementById('flash-btn').disabled = !ready;
@@ -1018,139 +1080,217 @@ function setStatus(type, text) {
 //  ERASE
 // ══════════════════════════════════════════════
 async function startErase() {
-  if (!connected) { log('err','Not connected.'); return; }
+  if (!connected || !esploader) { log('err','Not connected.'); return; }
   if (!confirm('This will permanently erase ALL flash memory including firmware, NVS, and filesystem. Continue?')) return;
 
   setStatus('flashing', 'Erasing flash…');
-  log('warn', '⚠ Starting full flash erase…');
+  log('warn', '⚠ Starting full flash erase (this can take a minute)…');
   showProgress('Erasing full flash…', 0);
 
   document.getElementById('erase-btn').disabled = true;
   document.getElementById('flash-btn').disabled = true;
 
-  const steps = [10,25,40,55,70,85,100];
-  for (const pct of steps) {
-    await sleep(350);
-    updateProgress('Erasing sectors…', pct);
-    if (pct < 100) log('muted', `Erase progress: ${pct}%`);
+  try {
+    await esploader.eraseFlash();
+    updateProgress('Erase complete', 100);
+    document.getElementById('progress-bar').classList.add('done');
+    log('ok', 'Full flash erase complete.');
+    setStatus('ready', 'Erased — ready to flash');
+  } catch (err) {
+    document.getElementById('progress-bar').classList.add('error');
+    log('err', 'Erase failed: ' + (err.message || err));
+    setStatus('error', 'Erase failed');
+  } finally {
+    document.getElementById('erase-btn').disabled = false;
+    checkFlashReady();
   }
-
-  log('ok', 'Full flash erase complete.');
-  setStatus('ready', 'Erased — ready to flash');
-  document.getElementById('erase-btn').disabled = false;
-  checkFlashReady();
 }
 
 // ══════════════════════════════════════════════
 //  FLASH
 // ══════════════════════════════════════════════
+// ── Convert an ArrayBuffer to a "binary string" (esptool-js expects this) ──
+function abToBinaryString(buf) {
+  const arr = new Uint8Array(buf);
+  const CHUNK = 0x8000;
+  let s = '';
+  for (let i = 0; i < arr.length; i += CHUNK) {
+    s += String.fromCharCode.apply(null, arr.subarray(i, i + CHUNK));
+  }
+  return s;
+}
+
+async function fetchAssetAsBinaryString(asset, label) {
+  log('info', `Downloading ${label}: ${asset.name} (${(asset.size/1024).toFixed(1)} KB)…`);
+  const res = await fetch(asset.browser_download_url);
+  if (!res.ok) throw new Error(`${asset.name} download failed (HTTP ${res.status})`);
+  const buf = await res.arrayBuffer();
+  log('muted', `  ✓ ${asset.name} fetched (${buf.byteLength} bytes)`);
+  return abToBinaryString(buf);
+}
+
 async function startFlash() {
-  if (!connected) { log('err', 'No device connected.'); return; }
-  if (!selectedFW && !localBinFile) { log('err', 'No firmware selected.'); return; }
+  if (!connected || !esploader) { log('err', 'No device connected.'); return; }
+  if (!selectedRelease && !localBinFile) { log('err', 'No firmware selected.'); return; }
 
   const doErase   = document.getElementById('toggle-erase').classList.contains('on');
   const doReset   = document.getElementById('toggle-reset').classList.contains('on');
-  const doVerify  = document.getElementById('toggle-verify').classList.contains('on');
   const doMonitor = document.getElementById('toggle-monitor').classList.contains('on');
-
-  const fwName = selectedFW ? selectedFW.name : localBinFile.name;
-  const fwTag  = selectedFW ? selectedFW.tag  : 'local';
 
   document.getElementById('flash-btn').classList.add('flashing');
   document.getElementById('flash-btn').disabled = true;
   document.getElementById('erase-btn').disabled = true;
-  setStatus('flashing', 'Flashing…');
+  setStatus('flashing', 'Preparing…');
+  showProgress('Preparing files…', 0);
 
-  log('muted', '─────────────────────────────────────────');
-  log('info', `Starting flash: ${fwName} (${fwTag})`);
-  log('info', `Options: erase=${doErase}, verify=${doVerify}, reset=${doReset}`);
-  log('muted', '─────────────────────────────────────────');
+  const fileArray = [];
+  let label = '';
 
-  showProgress('Initializing…', 0);
+  try {
+    // ── Build fileArray either from a Release or a local .bin ──
+    if (selectedRelease) {
+      label = selectedRelease.tag;
+      log('muted', '─────────────────────────────────────────');
+      log('info', `Flashing ${label} from GitHub Release`);
+      log('info', `Options: eraseAll=${doErase}, reset=${doReset}, monitor=${doMonitor}`);
+      log('muted', '─────────────────────────────────────────');
 
-  // ── Phase 1: Optional erase ──
-  if (doErase) {
-    log('warn', 'Erasing flash before write…');
-    await animateProgress('Erasing flash…', 0, 20, 800);
-    log('ok', 'Erase complete.');
-  }
-
-  // ── Phase 2: Write bootloader ──
-  log('info', 'Writing bootloader @ 0x1000…');
-  await animateProgress('Writing bootloader (0x1000)…', doErase ? 20 : 0, doErase ? 30 : 10, 500);
-  log('ok', 'Bootloader written.');
-
-  // ── Phase 3: Write partition table ──
-  log('info', 'Writing partition table @ 0x8000…');
-  await animateProgress('Writing partitions (0x8000)…', null, doErase ? 40 : 20, 400);
-  log('ok', 'Partition table written.');
-
-  // ── Phase 4: Write app firmware ──
-  log('info', `Writing app firmware @ 0x10000 — ${fwName}…`);
-  const writeSteps = [
-    [null, doErase ? 50 : 30, 300],
-    [null, doErase ? 60 : 45, 400],
-    [null, doErase ? 68 : 54, 300],
-    [null, doErase ? 75 : 62, 350],
-    [null, doErase ? 82 : 70, 300],
-    [null, doErase ? 88 : 78, 400],
-    [null, doErase ? 93 : 85, 300],
-  ];
-  for (const [, end, dur] of writeSteps) {
-    await animateProgress(`Writing app firmware (${Math.round(end)}%)…`, null, end, dur);
-    log('muted', `→ Wrote chunk @ 0x${(0x10000 + end * 100).toString(16).toUpperCase()}`);
-  }
-  log('ok', `App firmware written: ${fwName}`);
-
-  // ── Phase 5: Verify ──
-  if (doVerify) {
-    log('info', 'Verifying written data…');
-    await animateProgress('Verifying…', null, doErase ? 97 : 93, 700);
-    const checksum = Math.floor(Math.random() * 0xFFFFFF).toString(16).toUpperCase().padStart(6, '0');
-    log('ok', `Verification passed. SHA256: 0x${checksum}…`);
-  }
-
-  // ── Phase 6: Done ──
-  await animateProgress('Complete!', null, 100, 300);
-  document.getElementById('progress-bar').classList.add('done');
-  document.getElementById('progress-bar').classList.remove('error');
-
-  log('muted', '─────────────────────────────────────────');
-  log('ok', '✓ Flash complete!');
-  log('accent', `Firmware: ${fwName}  Tag: ${fwTag}`);
-
-  if (doReset) {
-    log('info', 'Sending reset pulse (RTS)…');
-    await sleep(300);
-    log('ok', 'Device rebooted successfully.');
-    if (doMonitor) {
-      await sleep(400);
-      switchTermTab('serial');
-      log('muted', '── Serial Monitor (post-flash) ─────────────');
-      await sleep(500);
-      log('accent', 'ets Jun  8 2016 00:22:57');
-      await sleep(200);
-      log('muted', 'rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)');
-      await sleep(300);
-      log('muted', 'configsip: 188777542, SPIWP:0xee');
-      await sleep(200);
-      log('info', 'Booting CyberDash v2.1.0…');
-      await sleep(400);
-      log('accent', '>> WiFi AP started: CyberDash-AP (192.168.4.1)');
-      await sleep(300);
-      log('ok', '>> Dashboard ready. Connect to http://192.168.4.1');
-      log('accent', '>> CyberDash ESP32 · All systems nominal.');
+      if (selectedRelease.bootloader) {
+        fileArray.push({
+          data: await fetchAssetAsBinaryString(selectedRelease.bootloader, 'bootloader'),
+          address: 0x1000,
+        });
+      }
+      if (selectedRelease.partitions) {
+        fileArray.push({
+          data: await fetchAssetAsBinaryString(selectedRelease.partitions, 'partitions'),
+          address: 0x8000,
+        });
+      }
+      if (selectedRelease.firmware) {
+        fileArray.push({
+          data: await fetchAssetAsBinaryString(selectedRelease.firmware, 'app firmware'),
+          address: 0x10000,
+        });
+      }
+    } else {
+      label = localBinFile.name;
+      const appAddrStr = document.getElementById('addr-app').value.trim();
+      const appAddr = parseInt(appAddrStr, 16);
+      if (isNaN(appAddr)) throw new Error(`Invalid app address: ${appAddrStr}`);
+      log('muted', '─────────────────────────────────────────');
+      log('info', `Flashing local file ${label} at 0x${appAddr.toString(16).toUpperCase()}…`);
+      log('muted', '─────────────────────────────────────────');
+      const buf = await localBinFile.arrayBuffer();
+      fileArray.push({ data: abToBinaryString(buf), address: appAddr });
     }
-  }
 
-  setStatus('success', 'Flash successful');
-  document.getElementById('flash-btn').classList.remove('flashing');
-  document.getElementById('flash-btn').disabled = false;
-  document.getElementById('erase-btn').disabled = false;
+    if (!fileArray.length) throw new Error('No binaries to flash.');
+
+    // ── Real flash ──
+    setStatus('flashing', 'Flashing…');
+    showProgress(`Writing ${fileArray.length} file(s)…`, 0);
+
+    const totalBytes = fileArray.reduce((n, f) => n + f.data.length, 0);
+    const filesWritten = [0];   // running tally of completed-file bytes
+
+    await esploader.writeFlash({
+      fileArray,
+      flashSize: 'keep',
+      eraseAll: doErase,
+      compress: true,
+      flashMode: 'keep',
+      flashFreq: 'keep',
+      reportProgress: (fileIndex, written, total) => {
+        // overall progress across all files
+        const priorBytes = filesWritten[fileIndex] || 0;
+        const overall = ((priorBytes + written) / totalBytes) * 100;
+        updateProgress(
+          `File ${fileIndex + 1}/${fileArray.length}  ${Math.round((written/total)*100)}%`,
+          overall,
+        );
+        if (written === total) {
+          filesWritten[fileIndex + 1] = priorBytes + total;
+          log('ok', `  ✓ file ${fileIndex + 1} written (${total} bytes)`);
+        }
+      },
+    });
+
+    updateProgress('Complete!', 100);
+    document.getElementById('progress-bar').classList.add('done');
+    document.getElementById('progress-bar').classList.remove('error');
+
+    log('muted', '─────────────────────────────────────────');
+    log('ok', `✓ Flash complete: ${label}`);
+
+    if (doReset) {
+      log('info', 'Resetting device into the new firmware…');
+      try { await esploader.after(); } catch (e) { /* hardReset may throw on some chips */ }
+      log('ok', 'Device reset.');
+    }
+
+    setStatus('success', 'Flash successful');
+
+    if (doMonitor) {
+      switchTermTab('serial');
+      await startSerialReader();
+    }
+  } catch (err) {
+    document.getElementById('progress-bar').classList.add('error');
+    log('err', 'Flash failed: ' + (err.message || err));
+    setStatus('error', 'Flash failed');
+  } finally {
+    document.getElementById('flash-btn').classList.remove('flashing');
+    document.getElementById('flash-btn').disabled = false;
+    document.getElementById('erase-btn').disabled = false;
+  }
 }
 
 // ══════════════════════════════════════════════
-//  SERIAL MONITOR  (real port read)
+//  SERIAL MONITOR (real port reader, post-flash)
+// ══════════════════════════════════════════════
+async function startSerialReader() {
+  if (!port) return;
+  // esptool-js leaves the port closed after disconnect — reopen at 115200
+  // for the boot-time serial console.
+  try {
+    if (!port.readable) {
+      await port.open({ baudRate: 115200, dataBits: 8, stopBits: 1, parity: 'none', bufferSize: 8192 });
+    }
+    serialReadAbort = new AbortController();
+    const decoder = new TextDecoder();
+    let buf = '';
+    log('muted', '── Serial Monitor · 115200 baud ──');
+    document.getElementById('serial-send-btn').disabled = false;
+
+    (async () => {
+      const reader = port.readable.getReader();
+      try {
+        while (!serialReadAbort.signal.aborted) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (!value) continue;
+          buf += decoder.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).replace(/\r$/, '');
+            buf = buf.slice(nl + 1);
+            if (line.length) log('accent', '< ' + line);
+          }
+        }
+      } catch (e) {
+        log('warn', 'Serial read ended: ' + (e.message || e));
+      } finally {
+        try { reader.releaseLock(); } catch (_) {}
+      }
+    })();
+  } catch (e) {
+    log('err', 'Cannot start serial monitor: ' + (e.message || e));
+  }
+}
+
+// ══════════════════════════════════════════════
+//  SERIAL SEND (writes one line to the open port)
 // ══════════════════════════════════════════════
 async function sendSerial() {
   const input = document.getElementById('serial-input');
@@ -1159,17 +1299,16 @@ async function sendSerial() {
   input.value = '';
   log('accent', '> ' + val);
 
-  if (!port || !writer) {
-    log('warn', 'Not connected to a serial port.');
+  if (!port || !port.writable) {
+    log('warn', 'No serial port open. Use Flash with "Open monitor after" enabled, or reconnect.');
     return;
   }
   try {
-    const enc = new TextEncoder();
-    const w   = port.writable.getWriter();
-    await w.write(enc.encode(val + '\r\n'));
+    const w = port.writable.getWriter();
+    await w.write(new TextEncoder().encode(val + '\r\n'));
     w.releaseLock();
   } catch (err) {
-    log('err', 'Serial write error: ' + err.message);
+    log('err', 'Serial write error: ' + (err.message || err));
   }
 }
 
