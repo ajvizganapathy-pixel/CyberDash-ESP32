@@ -1150,23 +1150,32 @@ function abToBinaryString(buf) {
 
 async function fetchAssetAsBinaryString(asset, label) {
   log('info', `Downloading ${label}: ${asset.name} (${(asset.size/1024).toFixed(1)} KB)…`);
-  // Prefer the GitHub API asset URL with Accept: octet-stream.
-  // api.github.com has ACAO:* unconditionally; browser_download_url's
-  // 302 → release-assets.githubusercontent.com can fail CORS preflight
-  // in some browsers/networks (the "Failed to fetch" path).
-  const url = asset.url || asset.browser_download_url;
+  // browser_download_url → 302 → objects.githubusercontent.com, which
+  // serves Access-Control-Allow-Origin: * — the only path that reliably
+  // works from a browser. The api.github.com asset URL 302s to
+  // release-assets.githubusercontent.com which lacks ACAO and fails CORS.
   let res;
+  let lastErr;
   try {
-    res = await fetch(url, {
-      headers: asset.url ? { 'Accept': 'application/octet-stream' } : {},
-      cache: 'no-store',
-    });
-  } catch (e) {
-    // Fall back to the direct download URL if the API path is blocked
-    log('warn', `  API fetch threw (${e.message}). Falling back to browser_download_url…`);
     res = await fetch(asset.browser_download_url, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch (e) {
+    lastErr = e;
+    log('warn', `  browser_download_url failed (${e.message}). Trying API asset URL…`);
+    try {
+      res = await fetch(asset.url, {
+        headers: { 'Accept': 'application/octet-stream' },
+        cache: 'no-store',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e2) {
+      throw new Error(
+        `${asset.name} could not be downloaded (CORS or network). ` +
+        `Tried browser_download_url (${lastErr.message}) and API asset URL (${e2.message}). ` +
+        `Workaround: download the .bin manually from the Releases page and use the "Local .bin" tab.`
+      );
+    }
   }
-  if (!res.ok) throw new Error(`${asset.name} download failed (HTTP ${res.status})`);
   const buf = await res.arrayBuffer();
   log('muted', `  ✓ ${asset.name} fetched (${buf.byteLength} bytes)`);
   return abToBinaryString(buf);
