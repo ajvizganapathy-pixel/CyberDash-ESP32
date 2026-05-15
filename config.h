@@ -1,11 +1,15 @@
 #pragma once
 #include <Arduino.h>
 
-// ---------- Wi-Fi ----------
-#define WIFI_SSID           "Airtel_anja_6760"
-#define WIFI_PASS           "air67968"
-#define HOSTNAME            "cyberdash"
-#define OTA_PASSWORD        "changeme"
+// ---------- Credentials ----------
+// Real values live in `secrets.h` (gitignored). Copy `secrets.example.h`
+// to `secrets.h` and fill in your Wi-Fi + OTA credentials before building.
+#if __has_include("secrets.h")
+  #include "secrets.h"
+#else
+  #include "secrets.example.h"
+  #warning "secrets.h not found — using placeholder values from secrets.example.h"
+#endif
 
 // ---------- Pins ----------
 #define PIN_TFT_SCK         18

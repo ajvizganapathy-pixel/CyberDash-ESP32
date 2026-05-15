@@ -6,6 +6,7 @@
 .vscode/launch.json
 .vscode/ipch/
 build/
+dist/
 *.o
 *.elf
 *.bin
@@ -13,3 +14,6 @@ build/
 *.hex
 .DS_Store
 Thumbs.db
+
+# Local credentials — never commit
+secrets.h

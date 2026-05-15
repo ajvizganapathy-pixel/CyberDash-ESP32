@@ -7,10 +7,14 @@ TFT dashboard · I2S sound monitoring · BME280 climate sensing · SD logging ·
 
 ![Platform](https://img.shields.io/badge/platform-ESP32-22e3ff?style=for-the-badge&logo=espressif&logoColor=black)
 ![Framework](https://img.shields.io/badge/framework-Arduino-00979d?style=for-the-badge&logo=arduino&logoColor=white)
-![Build](https://img.shields.io/badge/build-PlatformIO-f5822a?style=for-the-badge&logo=platformio&logoColor=white)
-![FreeRTOS](https://img.shields.io/badge/RTOS-FreeRTOS-3bff9a?style=for-the-badge)
-![OTA](https://img.shields.io/badge/OTA-ArduinoOTA-ff37c7?style=for-the-badge)
+![Build](https://img.shields.io/github/actions/workflow/status/ajvizganapathy-pixel/CyberDash-ESP32/build.yml?branch=main&style=for-the-badge&logo=platformio&logoColor=white)
+![Release](https://img.shields.io/github/v/release/ajvizganapathy-pixel/CyberDash-ESP32?style=for-the-badge&color=00e5c8)
+![Downloads](https://img.shields.io/github/downloads/ajvizganapathy-pixel/CyberDash-ESP32/total?style=for-the-badge&color=ff37c7)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey?style=for-the-badge)
+
+**[⚡ Flash from your browser](https://ajvizganapathy-pixel.github.io/CyberDash-ESP32/flasher.html)** ·
+**[📦 Latest Release](https://github.com/ajvizganapathy-pixel/CyberDash-ESP32/releases/latest)** ·
+**[🌐 Project Site](https://ajvizganapathy-pixel.github.io/CyberDash-ESP32/)**
 
 </div>
 
@@ -85,9 +89,36 @@ CyberDash-ESP32/
 └── graphify-out/          knowledge-graph snapshot of the codebase
 ```
 
-## ✦ Build & Flash
+## ✦ Install
+
+### Option A — Web Flasher (zero setup)
+
+Plug the ESP32 into a Chrome- or Edge-based browser and visit
+**[flasher.html](https://ajvizganapathy-pixel.github.io/CyberDash-ESP32/flasher.html)**.
+The installer fetches the latest [GitHub Release](https://github.com/ajvizganapathy-pixel/CyberDash-ESP32/releases/latest),
+detects the chip, and writes `bootloader.bin` / `partitions.bin` / `firmware.bin`
+to the standard offsets. No toolchain needed.
+
+> ⚠️ Release binaries ship with **placeholder credentials**. After first flash, connect
+> to the device's serial console (or edit `secrets.h` and rebuild locally) to set your
+> real Wi-Fi credentials.
+
+### Option B — esptool (manual)
 
 ```bash
+esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 write_flash \
+  0x1000  bootloader.bin \
+  0x8000  partitions.bin \
+  0x10000 firmware.bin
+```
+
+### Option C — Build from source (PlatformIO)
+
+```bash
+# First-time setup
+cp secrets.example.h secrets.h
+# → edit secrets.h with your Wi-Fi + OTA password
+
 # 1) Firmware (first flash via USB)
 pio run -t upload
 
@@ -102,7 +133,28 @@ pio run -e esp32dev-ota -t upload
 pio run -e esp32dev-ota -t uploadfs
 ```
 
-mDNS hostname: **`cyberdash.local`** · default OTA password: `changeme` (change in `config.h`).
+mDNS hostname: **`cyberdash.local`** · default OTA password: `changeme` (override in `secrets.h`).
+
+## ✦ Releases & CI
+
+| Workflow                                                   | Trigger              | Output                                    |
+| ---------------------------------------------------------- | -------------------- | ----------------------------------------- |
+| [`build.yml`](.github/workflows/build.yml)                 | push / PR to `main`  | Validates build; artifacts for 14 days    |
+| [`release.yml`](.github/workflows/release.yml)             | tag `v*.*.*`         | Builds + publishes GitHub Release w/ bins |
+| [`pages.yml`](.github/workflows/pages.yml)                 | change to root HTML  | Deploys site to GitHub Pages              |
+
+**Cutting a release:**
+
+```bash
+# Bump version in version.h, update CHANGELOG.md
+git commit -am "release: v1.1.0"
+git tag v1.1.0
+git push origin main --tags
+# → release.yml builds firmware and attaches it to a new GitHub Release
+```
+
+Every release ships `firmware.bin`, `bootloader.bin`, `partitions.bin`, plus a
+`manifest.json` (sha256 + flash offsets) consumed by the web flasher.
 
 ## ✦ Endpoints
 

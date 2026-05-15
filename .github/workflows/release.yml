@@ -1,0 +1,111 @@
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build + publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache PlatformIO + pip
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade platformio
+
+      - name: Use placeholder secrets (release binaries must be credential-free)
+        run: cp secrets.example.h secrets.h
+
+      - name: Build firmware
+        env:
+          CYBERDASH_VERSION: ${{ steps.tag.outputs.name }}
+        run: pio run -e esp32dev
+
+      - name: Rename artifacts with tag
+        working-directory: dist
+        run: |
+          TAG="${{ steps.tag.outputs.name }}"
+          for f in firmware bootloader partitions; do
+            [ -f "${f}.bin" ] && cp "${f}.bin" "cyberdash-${TAG}-${f}.bin"
+          done
+          ls -lh
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          {
+            echo "## CyberDash-ESP32 ${{ steps.tag.outputs.name }}"
+            echo
+            echo "### Downloads"
+            echo "- \`firmware.bin\` — main application (flash to \`0x10000\`)"
+            echo "- \`bootloader.bin\` — second-stage bootloader (\`0x1000\`)"
+            echo "- \`partitions.bin\` — partition table (\`0x8000\`)"
+            echo "- \`manifest.json\` — checksums + offsets for the web flasher"
+            echo
+            echo "### Flash with the web installer"
+            echo "https://ajvizganapathy-pixel.github.io/CyberDash-ESP32/flasher.html"
+            echo
+            echo "### Flash with esptool"
+            echo '```bash'
+            echo "esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 write_flash \\"
+            echo "  0x1000  bootloader.bin \\"
+            echo "  0x8000  partitions.bin \\"
+            echo "  0x10000 firmware.bin"
+            echo '```'
+            echo
+            echo "### Commit"
+            echo "\`${GITHUB_SHA::7}\` · built $(date -u +'%Y-%m-%d %H:%M UTC')"
+          } > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: CyberDash ${{ steps.tag.outputs.name }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/firmware.bin
+            dist/bootloader.bin
+            dist/partitions.bin
+            dist/manifest.json
+            dist/cyberdash-*-firmware.bin
+            dist/cyberdash-*-bootloader.bin
+            dist/cyberdash-*-partitions.bin
