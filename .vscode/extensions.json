@@ -1,7 +1,12 @@
 {
-  "recommendations": [
-    "platformio.platformio-ide",
-    "ms-vscode.cpptools",
-    "anthropic.claude-code"
-  ]
+    // See http://go.microsoft.com/fwlink/?LinkId=827846
+    // for the documentation about the extensions.json format
+    "recommendations": [
+        "anthropic.claude-code",
+        "ms-vscode.cpptools",
+        "platformio.platformio-ide"
+    ],
+    "unwantedRecommendations": [
+        "ms-vscode.cpptools-extension-pack"
+    ]
 }
